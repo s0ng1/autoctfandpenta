@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__sandbox__execute_code",
+      "mcp__sandbox__list_sessions",
+      "mcp__sandbox__close_session",
+      "Glob",
+      "Grep",
+      "Read",
+      "TodoWrite"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "sandbox"
+  ]
+}
