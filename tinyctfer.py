@@ -112,6 +112,8 @@ Target: {ctf}
 4. Save the final report to /home/ubuntu/Workspace/
 5. Use Meta-Tooling: write Python code to orchestrate tools, not step-by-step dialogue
 6. **REPORT LANGUAGE: The final report MUST be written entirely in CHINESE (中文). All sections including titles, vulnerability descriptions, severity ratings, and remediation advice must be in Chinese.**
+7. **BUSINESS SAFETY**: DO NOT perform DoS attacks. Rate limit requests (add delays). Avoid destructive operations (no DELETE/DROP). STOP if target slows down.
+8. **USE HTML REPORT**: Use toolset.report.generate_html_report() for final report with embedded screenshots.
 
 **Do not scan ports or IP segments outside the target.**
 '''.strip()

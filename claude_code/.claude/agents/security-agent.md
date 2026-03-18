@@ -242,39 +242,78 @@ output = toolset.terminal.get_output(session)
 
 **重要：报告必须使用全中文输出，包括所有标题、描述、建议等。**
 
-测试完成后，**必须**在工作目录生成文本报告：
+### 渗透测试 HTML 报告生成（推荐）
+
+使用 `toolset.report` 模块生成包含截图的 HTML 报告：
+
+```python
+import toolset
+
+# 1. 创建漏洞列表
+findings = []
+
+# 2. 添加漏洞（每个漏洞都可以附带截图）
+toolset.report.add_finding_with_screenshot(
+    findings_list=findings,
+    name="SQL注入漏洞-登录接口",
+    severity="高危",
+    description="登录页面的username参数存在SQL注入，可通过构造特定payload绕过认证",
+    evidence="Payload: admin' OR '1'='1'-- 成功绕过登录",
+    remediation="使用参数化查询（Prepared Statements），禁止直接拼接SQL语句",
+    screenshot_path="/home/ubuntu/Workspace/screenshots/sqli_login.png"  # 验证截图路径
+)
+
+# 继续添加其他漏洞...
+toolset.report.add_finding_with_screenshot(
+    findings_list=findings,
+    name="XSS跨站脚本漏洞",
+    severity="中危",
+    description="评论功能未对用户输入进行过滤，存在存储型XSS",
+    evidence="<script>alert('XSS')</script> 成功执行",
+    remediation="对所有用户输入进行HTML编码，实施CSP策略",
+    screenshot_path="/home/ubuntu/Workspace/screenshots/xss_comment.png"
+)
+
+# 3. 生成 HTML 报告（包含所有截图）
+report_path = toolset.report.generate_html_report(
+    target="http://target.com",
+    findings=findings,
+    report_title="Web应用渗透测试报告"
+)
+
+print(f"[+] HTML报告已生成: {report_path}")
+# 报告可以用浏览器直接打开，也可以复制到Word中
+```
+
+### CTF 场景报告
 
 ```python
 import toolset
 import datetime
 
-def save_report(target, findings, is_ctf=False):
-    """保存测试报告到文件（必须生成中文报告）"""
-    
+def save_ctf_report(target, flag, process):
+    """保存CTF解题报告"""
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"CTF_Report_{target.replace('://', '_').replace('/', '_')}_{timestamp}.md"
     
-    if is_ctf:
-        filename = f"CTF_Report_{target.replace('://', '_').replace('/', '_')}_{timestamp}.md"
-        content = generate_ctf_report(target, findings)  # 使用中文生成
-    else:
-        filename = f"Pentest_Report_{target.replace('://', '_').replace('/', '_')}_{timestamp}.md"
-        content = generate_pentest_report(target, findings)  # 使用中文生成
+    content = f"""# CTF解题报告
+
+## 题目信息
+- 目标: {target}
+- 完成时间: {timestamp}
+
+## 解题过程
+{process}
+
+## 结果
+- Flag: `{flag}`
+"""
     
-    # 保存到工作目录
     with open(f"/home/ubuntu/Workspace/{filename}", "w", encoding="utf-8") as f:
         f.write(content)
     
     return filename
-
-# 生成报告时使用中文，包括：
-# - 所有标题（测试概述、风险汇总、详细发现、修复建议等）
-# - 漏洞描述（SQL注入、XSS、越权等）
-# - 严重程度（严重、高危、中危、低危）
-# - 影响描述和修复建议
-
-# 在测试结束时调用
-report_file = save_report("http://target.com", findings, is_ctf=False)
-print(f"[+] 报告已保存: {report_file}")
+```
 ```
 
 ## 执行准则
@@ -286,6 +325,50 @@ print(f"[+] 报告已保存: {report_file}")
   - 扫描任务：60-300s
   - 长时间任务（sqlmap）：300-600s
 - **错误处理**：超时必须重试，不能跳过
+
+### 速率控制与业务安全（渗透测试必须遵守）
+
+**⚠️ 严禁以下行为，避免影响业务运行：**
+
+1. **禁止 DOS/DDOS 攻击**
+   - 不得发送大量并发请求
+   - 不得使用工具进行压力测试（除非明确授权）
+   - 避免短时间内重复请求同一接口
+
+2. **请求频率限制**
+   ```python
+   import time
+   
+   # 每次请求之间添加延迟（至少 0.5-1 秒）
+   time.sleep(1)
+   
+   # 批量测试时使用低并发
+   for url in urls:
+       response = requests.get(url)
+       time.sleep(0.5)  # 限制速率
+   ```
+
+3. **避免破坏性操作**
+   - 不得删除、修改生产数据
+   - 文件上传测试使用无害文件（如 txt 而非 exe）
+   - SQL 注入测试使用 SELECT 而非 UPDATE/DELETE
+   - 命令注入避免执行 `rm`、`drop` 等危险命令
+
+4. **扫描强度控制**
+   ```python
+   # 目录扫描 - 使用小字典，低线程
+   dirsearch -u target.com -t 5 --delay 0.5
+   
+   # 漏洞扫描 - 限制速率
+   nuclei -u target.com -rate-limit 10
+   
+   # 密码爆破 - 必须限制频率
+   hydra -t 1 -W 2  # 单线程，2秒延迟
+   ```
+
+5. **监控业务响应**
+   - 如发现目标响应变慢或报错，立即停止测试
+   - 记录所有可能影响业务的操作
 
 ### 证据记录
 关键节点必须截图或记录：
