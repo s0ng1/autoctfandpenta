@@ -29,7 +29,7 @@ from docker.errors import ImageNotFound
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 class Ctfer:
-    """CTF Solver Runtime - Provide AI maximum freedom within safe container boundary"""
+    """CTF Solver & Pentest Runtime - Provide AI maximum freedom within safe container boundary"""
     def __init__(self, vnc_port, workspace):
         # Sandbox: Ubuntu desktop + Claude Code + Python Executor MCP + Toolset + Security tools
         self.image = "l3yx/sandbox:latest"
@@ -68,24 +68,53 @@ class Ctfer:
 
 if __name__ == "__main__":
     # Main Entry Point: The 100-line Baby Runtime in Action
-    parser = argparse.ArgumentParser(description='CTF Challenge Solver')
-    parser.add_argument('--ctf', type=str, required=True, help='CTF challenge URL')
+    parser = argparse.ArgumentParser(description='AI-Powered CTF Solver & Web Pentest Tool')
+    parser.add_argument('--ctf', type=str, required=True, help='Target URL (CTF challenge or website to test)')
     parser.add_argument('--vnc-port', type=int, default=5901, help='VNC port (default: 5901)')
     parser.add_argument('--workspace', type=str, default="workspace", help='Workspace directory (default: workspace)')
+    parser.add_argument('--mode', type=str, choices=['ctf', 'pentest'], default='ctf',
+                        help='Task mode: ctf (find flag) or pentest (full security assessment)')
 
     args = parser.parse_args()
     ctf = args.ctf
     vnc_port = args.vnc_port
     workspace = os.path.abspath(args.workspace)
+    mode = args.mode
 
-    task = f'''
-    Use the security-agent: Solve the CTF challenge (obtaining the Flag completes the task, you can end work immediately, don't need to verify the flag's accuracy.)
+    # Generate task based on mode
+    if mode == 'ctf':
+        task = f'''
+Use the security-agent: This is a **CTF CHALLENGE**.
+Your goal is to find the flag (format: flag{{...}} or FLAG{{...}}).
+Once you obtain the flag, the task is COMPLETE - you can end immediately.
 
-    Challenge Information:
-    {ctf}
+Target: {ctf}
 
-    **You don't need to scan ports or IP segments, all IP and ports needed for solving are already listed**
-    '''.strip()
+**Do not scan ports or IP segments outside the target.**
+'''.strip()
+        print(f"[+] 模式: CTF 解题")
+    else:
+        task = f'''
+Use the security-agent: This is a **WEB PENETRATION TEST** (NOT a CTF).
+Perform a comprehensive security assessment:
+
+Phase 1 - Reconnaissance: Identify tech stack, endpoints, input points
+Phase 2 - Vulnerability Discovery: Test SQLi, XSS, RCE, file upload, auth bypass, IDOR, etc.
+Phase 3 - Verification: Exploit vulnerabilities and CAPTURE SCREENSHOTS as evidence
+Phase 4 - Reporting: Generate detailed security report with findings and remediation
+
+Target: {ctf}
+
+**CRITICAL REQUIREMENTS:**
+1. This is PENTEST mode - do NOT stop when finding "flag-like" strings in HTML comments
+2. Complete ALL test phases, do NOT stop early
+3. Every verified vulnerability MUST have a screenshot
+4. Save the final report to /home/ubuntu/Workspace/
+5. Use Meta-Tooling: write Python code to orchestrate tools, not step-by-step dialogue
+
+**Do not scan ports or IP segments outside the target.**
+'''.strip()
+        print(f"[+] 模式: 渗透测试")
 
     print("[+] 启动沙盒...")
     ctfer = Ctfer(vnc_port, workspace)
@@ -93,7 +122,7 @@ if __name__ == "__main__":
     ctfer.container.exec_run(["bash","wait.sh"], workdir="/opt/claude_code")
     print("[+] mcp服务已就绪...")
     print(f"[+] 可以连接 vnc://127.0.0.1:{vnc_port} 查看可视化界面, 密码123456")
-    print(f"[+] 开始解题, 可以打开 {workspace} 查看解题步骤")
+    print(f"[+] 开始{'解题' if mode == 'ctf' else '渗透测试'}, 可以打开 {workspace} 查看{'解题步骤' if mode == 'ctf' else '测试报告'}")
     res = ctfer.container.exec_run(["claude", "--dangerously-skip-permissions", "--print", task], workdir="/opt/claude_code")
     ctfer.cleanup()
     print("[+] 结束运行")
