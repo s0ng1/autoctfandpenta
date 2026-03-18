@@ -1,3 +1,12 @@
+"""
+Generate HTML reports with vulnerability details and embedded screenshots.
+"""
+from core import namespace
+
+namespace()
+
 from .report import ReportGenerator
 
-__all__ = ['ReportGenerator']
+report = ReportGenerator()
+
+__all__ = ['report']
