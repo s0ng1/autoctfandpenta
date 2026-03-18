@@ -111,6 +111,7 @@ Target: {ctf}
 3. Every verified vulnerability MUST have a screenshot
 4. Save the final report to /home/ubuntu/Workspace/
 5. Use Meta-Tooling: write Python code to orchestrate tools, not step-by-step dialogue
+6. **REPORT LANGUAGE: The final report MUST be written entirely in CHINESE (中文). All sections including titles, vulnerability descriptions, severity ratings, and remediation advice must be in Chinese.**
 
 **Do not scan ports or IP segments outside the target.**
 '''.strip()

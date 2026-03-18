@@ -177,7 +177,9 @@ output = toolset.terminal.get_output(session)
 
 ### Phase 4: 报告生成
 
-**CTF 场景报告格式：**
+**重要：所有报告必须使用中文输出**
+
+**CTF 场景报告格式（中文）：**
 ```markdown
 ## CTF 解题报告
 
@@ -194,7 +196,7 @@ output = toolset.terminal.get_output(session)
 - Flag: `flag{xxxxxxxx}`
 ```
 
-**渗透测试场景报告格式：**
+**渗透测试场景报告格式（中文）：**
 ```markdown
 # Web 应用渗透测试报告
 
@@ -206,15 +208,15 @@ output = toolset.terminal.get_output(session)
 ## 2. 风险汇总
 | 严重等级 | 数量 |
 |---------|------|
-| Critical | X |
-| High | X |
-| Medium | X |
-| Low | X |
+| 严重 | X |
+| 高危 | X |
+| 中危 | X |
+| 低危 | X |
 
 ## 3. 详细发现
 
 ### 3.1 [漏洞名称]
-- **风险等级**: Critical/High/Medium/Low
+- **风险等级**: 严重/高危/中危/低危
 - **漏洞类型**: SQL注入/XSS/越权等
 - **影响描述**: 可导致 XX 后果
 - **复现步骤**:
@@ -238,6 +240,8 @@ output = toolset.terminal.get_output(session)
 
 ## 报告输出要求
 
+**重要：报告必须使用全中文输出，包括所有标题、描述、建议等。**
+
 测试完成后，**必须**在工作目录生成文本报告：
 
 ```python
@@ -245,22 +249,28 @@ import toolset
 import datetime
 
 def save_report(target, findings, is_ctf=False):
-    """保存测试报告到文件"""
+    """保存测试报告到文件（必须生成中文报告）"""
     
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     
     if is_ctf:
         filename = f"CTF_Report_{target.replace('://', '_').replace('/', '_')}_{timestamp}.md"
-        content = generate_ctf_report(target, findings)
+        content = generate_ctf_report(target, findings)  # 使用中文生成
     else:
         filename = f"Pentest_Report_{target.replace('://', '_').replace('/', '_')}_{timestamp}.md"
-        content = generate_pentest_report(target, findings)
+        content = generate_pentest_report(target, findings)  # 使用中文生成
     
     # 保存到工作目录
     with open(f"/home/ubuntu/Workspace/{filename}", "w", encoding="utf-8") as f:
         f.write(content)
     
     return filename
+
+# 生成报告时使用中文，包括：
+# - 所有标题（测试概述、风险汇总、详细发现、修复建议等）
+# - 漏洞描述（SQL注入、XSS、越权等）
+# - 严重程度（严重、高危、中危、低危）
+# - 影响描述和修复建议
 
 # 在测试结束时调用
 report_file = save_report("http://target.com", findings, is_ctf=False)
