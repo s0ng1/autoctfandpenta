@@ -1,5 +1,5 @@
 """
-报告生成模块 - 支持生成包含截图的 HTML/Word 兼容报告
+报告生成模块 - 支持生成包含截图的 HTML/Word 报告
 """
 
 import os
@@ -335,7 +335,210 @@ class ReportGenerator:
             f.write(html_content)
         
         return report_path
-    
+
+    @tool()
+    def generate_word_report(
+        self,
+        target: Annotated[str, "测试目标 URL"],
+        findings: Annotated[List[Dict], "漏洞发现列表，每个漏洞包含 name, severity, description, evidence, remediation, screenshot_path"],
+        report_title: Annotated[str, "报告标题"] = "Web应用渗透测试报告"
+    ) -> str:
+        """
+        生成包含漏洞详情和截图的 Word 报告 (.docx)
+        
+        Example:
+            import toolset
+            
+            findings = [
+                {
+                    'name': 'SQL注入漏洞',
+                    'severity': '高危',
+                    'description': '登录接口存在SQL注入',
+                    'evidence': 'Payload: admin\' OR \'1\'=\'1',
+                    'remediation': '使用参数化查询',
+                    'screenshot_path': '/home/ubuntu/Workspace/screenshots/sqli.png'
+                }
+            ]
+            
+            report_path = toolset.report.generate_word_report(
+                target="http://target.com",
+                findings=findings,
+                report_title="渗透测试报告"
+            )
+        """
+        try:
+            from docx import Document
+            from docx.shared import Inches, Pt, RGBColor
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.oxml.ns import qn
+        except ImportError:
+            # 如果 python-docx 未安装，返回提示
+            return "[ERROR] python-docx 未安装，请运行: pip install python-docx"
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # 统计漏洞数量
+        severity_counts = {"严重": 0, "高危": 0, "中危": 0, "低危": 0, "信息": 0}
+        for finding in findings:
+            severity = finding.get('severity', '信息')
+            if severity in severity_counts:
+                severity_counts[severity] += 1
+        
+        # 创建 Word 文档
+        doc = Document()
+        
+        # 设置默认字体
+        style = doc.styles['Normal']
+        style.font.name = 'Microsoft YaHei'
+        style._element.rPr.rFonts.set(qn('w:eastAsia'), 'Microsoft YaHei')
+        
+        # 标题
+        title = doc.add_heading(report_title, 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # 基本信息
+        doc.add_heading('基本信息', level=1)
+        info_table = doc.add_table(rows=3, cols=2)
+        info_table.style = 'Light Grid Accent 1'
+        info_data = [
+            ('测试目标', target),
+            ('测试时间', timestamp),
+            ('评估方式', '自动化安全测试')
+        ]
+        for i, (key, value) in enumerate(info_data):
+            info_table.rows[i].cells[0].text = key
+            info_table.rows[i].cells[1].text = value
+        
+        doc.add_paragraph()
+        
+        # 执行摘要
+        doc.add_heading('执行摘要', level=1)
+        doc.add_paragraph(f'本次安全评估共发现 {len(findings)} 个安全发现项。')
+        
+        # 风险汇总表
+        doc.add_heading('风险汇总', level=2)
+        summary_table = doc.add_table(rows=6, cols=2)
+        summary_table.style = 'Light Grid Accent 1'
+        summary_data = [
+            ('严重程度', '数量'),
+            ('严重', str(severity_counts['严重'])),
+            ('高危', str(severity_counts['高危'])),
+            ('中危', str(severity_counts['中危'])),
+            ('低危', str(severity_counts['低危'])),
+            ('信息', str(severity_counts['信息']))
+        ]
+        for i, (key, value) in enumerate(summary_data):
+            summary_table.rows[i].cells[0].text = key
+            summary_table.rows[i].cells[1].text = value
+            # 第一行加粗
+            if i == 0:
+                for cell in summary_table.rows[i].cells:
+                    for paragraph in cell.paragraphs:
+                        for run in paragraph.runs:
+                            run.font.bold = True
+        
+        doc.add_paragraph()
+        
+        # 详细发现
+        doc.add_heading('详细发现', level=1)
+        
+        for i, finding in enumerate(findings, 1):
+            # 漏洞标题（带严重程度）
+            severity = finding.get('severity', '信息')
+            finding_heading = doc.add_heading(f'{i}. {finding.get("name", "未命名漏洞")} [{severity}]', level=2)
+            
+            # 漏洞信息表格
+            finding_table = doc.add_table(rows=5, cols=2)
+            finding_table.style = 'Light List Accent 1'
+            
+            # 填充表格数据
+            rows_data = [
+                ('漏洞类型', finding.get('type', '未分类')),
+                ('严重程度', severity),
+                ('漏洞描述', finding.get('description', '无描述')),
+                ('影响描述', finding.get('impact', finding.get('evidence', '无影响描述'))),
+                ('修复建议', finding.get('remediation', '暂无修复建议'))
+            ]
+            
+            for row_idx, (label, content) in enumerate(rows_data):
+                finding_table.rows[row_idx].cells[0].text = label
+                finding_table.rows[row_idx].cells[1].text = content
+                # 设置标签列加粗
+                finding_table.rows[row_idx].cells[0].paragraphs[0].runs[0].font.bold = True
+            
+            # 添加截图（如果存在）
+            screenshot_path = finding.get('screenshot_path', '')
+            if screenshot_path and os.path.exists(screenshot_path):
+                doc.add_paragraph()
+                doc.add_heading('验证截图', level=3)
+                try:
+                    # 添加图片，限制宽度为 6 英寸
+                    doc.add_picture(screenshot_path, width=Inches(6.0))
+                    last_paragraph = doc.paragraphs[-1]
+                    last_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                except Exception as e:
+                    doc.add_paragraph(f'[截图添加失败: {str(e)}]')
+            
+            doc.add_paragraph()  # 漏洞之间空行
+        
+        # 测试结论
+        doc.add_heading('测试结论', level=1)
+        doc.add_paragraph('本次安全评估已完成对所有测试项目的检查。建议根据上述发现项的严重程度，按照修复建议及时进行整改。')
+        
+        # 免责声明
+        doc.add_heading('免责声明', level=1)
+        disclaimer = doc.add_paragraph(
+            '本次安全评估以受控方式进行，旨在识别安全弱点。'
+            '发现应用于改进应用的安全态势。未经许可对系统进行未授权测试是违法行为。'
+        )
+        disclaimer.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        
+        # 页脚
+        doc.add_paragraph()
+        footer = doc.add_paragraph(f'报告生成时间：{timestamp}')
+        footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        footer.runs[0].font.color.rgb = RGBColor(128, 128, 128)
+        
+        # 保存文档
+        filename = f"Pentest_Report_{target.replace('://', '_').replace('/', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+        report_path = os.path.join(self.workspace, filename)
+        doc.save(report_path)
+        
+        return report_path
+
+    @tool()
+    def generate_report(
+        self,
+        target: Annotated[str, "测试目标 URL"],
+        findings: Annotated[List[Dict], "漏洞发现列表"],
+        report_title: Annotated[str, "报告标题"] = "Web应用渗透测试报告",
+        format: Annotated[str, "报告格式: html 或 docx"] = "html"
+    ) -> str:
+        """
+        生成报告（自动选择格式）
+        
+        Example:
+            import toolset
+            
+            # 生成 HTML 报告
+            report_path = toolset.report.generate_report(
+                target="http://target.com",
+                findings=findings,
+                format="html"
+            )
+            
+            # 生成 Word 报告
+            report_path = toolset.report.generate_report(
+                target="http://target.com",
+                findings=findings,
+                format="docx"
+            )
+        """
+        if format.lower() == "docx":
+            return self.generate_word_report(target, findings, report_title)
+        else:
+            return self.generate_html_report(target, findings, report_title)
+
     @tool()
     def add_finding_with_screenshot(
         self,

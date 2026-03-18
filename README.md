@@ -1,19 +1,5 @@
 [![badge](./README/badge.png)](https://zc.tencent.com/competition/competitionHackathon?code=cha004)
 
-## 介绍
-
-腾讯云黑客松-智能渗透挑战赛 **第 4 名** 核心代码。
-
-文章：https://mp.weixin.qq.com/s/jT4poWZ4Gfu3faXvul07HA
-
-PPT：https://wiki.chainreactors.red/blog/2025/12/01/intent_is_all_you_need/
-
-演讲视频：https://www.bilibili.com/video/BV1z12eBkETz
-
-比赛详情以及其他队伍资料：https://zc.tencent.com/competition/competitionHackathon?code=cha004
-
-
-
 ## 使用方法
 
 1. 下载沙盒镜像：

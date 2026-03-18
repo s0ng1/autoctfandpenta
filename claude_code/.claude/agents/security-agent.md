@@ -242,9 +242,9 @@ output = toolset.terminal.get_output(session)
 
 **重要：报告必须使用全中文输出，包括所有标题、描述、建议等。**
 
-### 渗透测试 HTML 报告生成（推荐）
+### 渗透测试报告生成（推荐）
 
-使用 `toolset.report` 模块生成包含截图的 HTML 报告：
+使用 `toolset.report` 模块生成包含截图的报告，支持 HTML 和 Word 格式：
 
 ```python
 import toolset
@@ -274,16 +274,40 @@ toolset.report.add_finding_with_screenshot(
     screenshot_path="/home/ubuntu/Workspace/screenshots/xss_comment.png"
 )
 
-# 3. 生成 HTML 报告（包含所有截图）
+# 3. 生成报告
+
+# 方式1：生成 Word 文档（.docx，推荐）
+report_path = toolset.report.generate_word_report(
+    target="http://target.com",
+    findings=findings,
+    report_title="Web应用渗透测试报告"
+)
+print(f"[+] Word报告已生成: {report_path}")
+# 可以直接用 Microsoft Word 或 WPS 打开编辑
+
+# 方式2：生成 HTML 报告（.html）
 report_path = toolset.report.generate_html_report(
     target="http://target.com",
     findings=findings,
     report_title="Web应用渗透测试报告"
 )
-
 print(f"[+] HTML报告已生成: {report_path}")
-# 报告可以用浏览器直接打开，也可以复制到Word中
+# 可以用浏览器打开，也可以复制到 Word 中
+
+# 方式3：自动选择格式
+report_path = toolset.report.generate_report(
+    target="http://target.com",
+    findings=findings,
+    format="docx"  # 或 "html"
+)
 ```
+
+**报告特点：**
+- ✅ 中文输出
+- ✅ 每个漏洞附带验证截图
+- ✅  severity 颜色标识（严重/高危/中危/低危/信息）
+- ✅ 风险汇总统计表
+- ✅ Word 格式可直接编辑
 
 ### CTF 场景报告
 
