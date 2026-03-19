@@ -6,6 +6,27 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+CONTAINER_WORKSPACE = "/home/ubuntu/Workspace"
+CONTENT_INLINE_THRESHOLD_BYTES = 4096
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
+DEFAULT_ALLOWED_HOST_PATTERNS = [
+    "127.0.0.1",
+    "::1",
+    "localhost",
+    "example.com",
+    ".example.com",
+    "example.org",
+    ".example.org",
+    "example.net",
+    ".example.net",
+]
+DANGEROUS_COMMAND_PATTERNS = [
+    "rm -rf /",
+    "mkfs.*",
+    "dd if=/dev/zero",
+    ":(){ :|:& };:",
+]
+
 
 def _utc_timestamp() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -60,19 +81,17 @@ class PentestStrategy(BaseStrategy):
     name: str = field(default="PentestStrategy", init=False)
     priority_testing_types: list[str] = field(
         default_factory=lambda: [
-            "tech-stack reconnaissance",
-            "authentication and authorization review",
-            "input validation flaws",
-            "file handling and upload abuse",
-            "injection and remote execution",
+            "entry-point reconnaissance",
+            "authz+authn review",
+            "high-signal injection tests",
         ]
     )
     aggression_level: str = "controlled"
-    allow_early_stop: bool = False
+    allow_early_stop: bool = True
     evidence_requirements: list[str] = field(
         default_factory=lambda: [
             "preserve reproducible HTTP/browser evidence",
-            "capture screenshots for every verified finding",
+            "capture screenshots for high-risk verified findings; allow HTTP or terminal evidence for medium/low risk issues",
             "retain candidate findings even when confidence is low",
         ]
     )
@@ -88,7 +107,7 @@ class PentestStrategy(BaseStrategy):
         default_factory=lambda: [
             "final report must be written in Chinese",
             "verified findings must include remediation guidance",
-            "final report must be generated as a docx file from structured artifacts",
+            "generate structured artifacts first and produce a docx report as an optional finalize step when needed",
         ]
     )
 
@@ -149,7 +168,7 @@ class ArtifactStore:
         },
         "candidate_findings": {
             "required": ["title", "type", "summary"],
-            "optional": ["severity", "location", "payload", "confidence", "source", "timestamp"],
+            "optional": ["severity", "location", "payload", "confidence", "finding_id", "evidence_id", "source", "timestamp"],
             "enums": {
                 "severity": ["严重", "高危", "中危", "低危", "信息"],
                 "confidence": ["low", "medium", "high"],
@@ -159,13 +178,15 @@ class ArtifactStore:
         },
         "candidate_evidence": {
             "required": ["kind", "summary"],
-            "optional": ["content", "url", "path", "related_finding", "source", "timestamp"],
+            "optional": ["content", "url", "path", "related_finding", "finding_id", "evidence_id", "source", "timestamp"],
             "enums": {"kind": ["http", "browser", "screenshot", "terminal", "note", "flag"]},
             "defaults": {"source": "agent"},
         },
         "verified_findings": {
             "required": ["title", "type", "summary"],
             "optional": [
+                "finding_id",
+                "evidence_id",
                 "severity",
                 "description",
                 "evidence_summary",
@@ -285,7 +306,7 @@ class IntentRuntime:
     def _build_intents(self) -> list[BaseIntent]:
         base_constraints = [
             "Do not scan ports or IP segments outside the target.",
-            "Use structured artifacts in /home/ubuntu/Workspace/intentlang/ instead of relying on memory only.",
+            f"Use structured artifacts in {CONTAINER_WORKSPACE}/intentlang/ instead of relying on memory only.",
         ]
 
         if self.mode == "pentest":
@@ -310,11 +331,10 @@ class IntentRuntime:
                     success_criteria=[
                         "verified findings artifact updated for every confirmed issue",
                         "candidate evidence retained even if verification fails",
-                        "final report reference artifact points to generated report when reporting is complete",
                     ],
                     constraints=base_constraints
                     + [
-                        "Every verified vulnerability must have screenshot evidence.",
+                        "High-risk verified vulnerabilities must include screenshot evidence; medium/low-risk findings may use HTTP transcripts or terminal output as equivalent proof.",
                         "No destructive database or state-changing payloads.",
                     ],
                 ),
@@ -362,6 +382,16 @@ class IntentRuntime:
             "artifact_schemas",
             {"items": self.artifacts.ARTIFACT_SCHEMAS},
         )
+        self.artifacts.write_metadata(
+            "security_policy",
+            {
+                "command_timeout_seconds": DEFAULT_COMMAND_TIMEOUT_SECONDS,
+                "allowed_host_patterns": DEFAULT_ALLOWED_HOST_PATTERNS,
+                "dangerous_command_patterns": DANGEROUS_COMMAND_PATTERNS,
+                "content_inline_threshold_bytes": CONTENT_INLINE_THRESHOLD_BYTES,
+                "container_workspace": CONTAINER_WORKSPACE,
+            },
+        )
 
     def render_agent_task(self) -> str:
         runtime_objects = "\n".join(
@@ -377,20 +407,19 @@ class IntentRuntime:
         )
 
         strategy = self.strategy
-        task_header = (
-            "Use the security-agent with an intent-native workflow."
-            if self.mode == "pentest"
-            else "Use the security-agent with an intent-native workflow for this CTF target."
-        )
+        task_header = "Use the security-agent with an intent-native workflow."
 
         mode_specific = (
             "\n".join(
                 [
                     "This is a WEB PENETRATION TEST (NOT a CTF).",
-                    "Do not stop on flag-like strings or trivia; complete recon, verification, and reporting.",
+                    "Default time budget: 15-25 minutes unless the user explicitly requests deeper coverage.",
+                    "Do not stop on flag-like strings or trivia; focus on verified security findings.",
+                    "Use an incremental workflow: validate promising entry points as soon as they are found instead of waiting for full recon to finish.",
+                    "You may stop expanding coverage once you have either 1 high-risk finding or 2-3 medium-risk findings with complete evidence.",
                     "The final report MUST be written entirely in Chinese.",
-                    "The final report MUST be a Word document (.docx).",
-                    "Use toolset.report.generate_word_report() for the final report with embedded screenshots.",
+                    "Generate artifacts/markdown first; create a Word document (.docx) only as a finalize step when needed.",
+                    "Use toolset.report.generate_word_report() for the final docx when the reporting step is requested or required.",
                 ]
             )
             if self.mode == "pentest"
@@ -414,8 +443,8 @@ Mode: {self.mode}
 {mode_specific}
 
 Intent-native contract:
-1. Read and follow the structured runtime metadata in /home/ubuntu/Workspace/intentlang/metadata/.
-2. Treat /home/ubuntu/Workspace/intentlang/artifacts/ as the persistent memory plane for this run.
+1. Read and follow the structured runtime metadata in {CONTAINER_WORKSPACE}/intentlang/metadata/, including security_policy.json.
+2. Treat {CONTAINER_WORKSPACE}/intentlang/artifacts/ as the persistent memory plane for this run.
 3. Update candidate artifacts aggressively when you discover useful signals; only be strict when promoting to verified findings or final report reference.
 4. Use Python code to orchestrate runtime objects instead of step-by-step conversational tool calls.
 
@@ -439,4 +468,5 @@ Safety rules:
 - Do not scan ports or IP segments outside the target.
 - Avoid DoS behavior, destructive writes, or unsafe high-rate activity.
 - Prefer storing findings and evidence into artifacts as you go instead of relying on context recall.
+- Respect security_policy.json for command timeout, dangerous command blocking, and allowed target hosts.
 """.strip()

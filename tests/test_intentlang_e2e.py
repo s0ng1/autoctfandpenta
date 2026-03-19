@@ -59,6 +59,51 @@ def _load_report_generator_class():
 IntentLangMemory = _load_intentlang_memory_class()
 ReportGenerator = _load_report_generator_class()
 
+from security_guard import SecurityViolation, validate_command
+
+
+def _load_python_executor_class():
+    nbformat_stub = types.ModuleType("nbformat")
+    nbformat_stub.write = lambda *args, **kwargs: None
+    nbformat_v4_stub = types.ModuleType("nbformat.v4")
+    nbformat_v4_stub.new_notebook = lambda: types.SimpleNamespace(cells=[])
+    nbformat_v4_stub.new_code_cell = lambda code, execution_count=None: types.SimpleNamespace(code=code, execution_count=execution_count, outputs=[])
+    nbformat_v4_stub.new_output = lambda output_type, **kwargs: types.SimpleNamespace(output_type=output_type, **kwargs)
+    nbformat_stub.v4 = nbformat_v4_stub
+    sys.modules.setdefault("nbformat", nbformat_stub)
+    sys.modules.setdefault("nbformat.v4", nbformat_v4_stub)
+
+    jupyter_client_stub = types.ModuleType("jupyter_client")
+    jupyter_client_stub.KernelManager = object
+    sys.modules.setdefault("jupyter_client", jupyter_client_stub)
+
+    fastmcp_stub = types.ModuleType("fastmcp")
+
+    class _FakeFastMCP:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def tool(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+
+        def run(self, *args, **kwargs):
+            return None
+
+    fastmcp_stub.FastMCP = _FakeFastMCP
+    sys.modules.setdefault("fastmcp", fastmcp_stub)
+
+    module_path = ROOT / "meta-tooling" / "service" / "python_executor_mcp.py"
+    spec = importlib.util.spec_from_file_location("python_executor_module", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module.PythonExecutor
+
+
+PythonExecutor = _load_python_executor_class()
+
 
 class _FakeExecResult:
     def __init__(self, exit_code, output):
@@ -125,7 +170,9 @@ class IntentLangCliE2ETest(unittest.TestCase):
 
             task = sandbox.container.last_task
             self.assertIn("Mode: pentest", task)
-            self.assertIn("The final report MUST be a Word document (.docx).", task)
+            self.assertIn("Default time budget: 15-25 minutes unless the user explicitly requests deeper coverage.", task)
+            self.assertIn("You may stop expanding coverage once you have either 1 high-risk finding or 2-3 medium-risk findings with complete evidence.", task)
+            self.assertIn("Generate artifacts/markdown first; create a Word document (.docx) only as a finalize step when needed.", task)
             self.assertIn("toolset.intentlang", task)
 
             metadata_dir = workspace / "intentlang" / "metadata"
@@ -229,6 +276,33 @@ class IntentLangMemoryE2ETest(unittest.TestCase):
             report_ref = memory.read_artifact("final_report_reference")
             self.assertEqual(report_ref["items"][0]["type"], "docx")
             self.assertTrue(report_ref["items"][0]["path"].endswith("pentest.docx"))
+
+    def test_large_candidate_evidence_content_spills_to_file_and_is_hydrated_on_read(self):
+        with TemporaryDirectory() as tempdir:
+            workspace = Path(tempdir)
+            runtime = IntentRuntime(target="https://spill.example", mode="pentest", workspace=workspace)
+            runtime.bootstrap()
+            memory = IntentLangMemory(workspace=str(workspace))
+
+            large_content = "A" * 5000
+            memory.append_artifact_item(
+                "candidate_evidence",
+                {
+                    "kind": "http",
+                    "summary": "Large HTTP transcript",
+                    "content": large_content,
+                },
+            )
+
+            raw_payload = json.loads((workspace / "intentlang" / "artifacts" / "candidate_evidence.json").read_text(encoding="utf-8"))
+            raw_item = raw_payload["items"][0]
+            self.assertNotIn("content", raw_item)
+            self.assertIn("path", raw_item)
+            self.assertTrue(Path(raw_item["path"]).exists())
+            self.assertEqual(raw_item["summary"], "Large HTTP transcript")
+
+            hydrated_payload = memory.read_artifact("candidate_evidence")
+            self.assertEqual(hydrated_payload["items"][0]["content"], large_content)
 
     def test_verified_findings_upsert_merges_duplicate_entries_and_preserves_richer_fields(self):
         with TemporaryDirectory() as tempdir:
@@ -414,11 +488,75 @@ class IntentLangMemoryE2ETest(unittest.TestCase):
                 media_files = [name for name in archive.namelist() if name.startswith("word/media/")]
             self.assertTrue(media_files)
 
+    def test_generate_word_report_prefers_evidence_and_finding_ids_for_screenshot_association(self):
+        with TemporaryDirectory() as tempdir:
+            workspace = Path(tempdir)
+            runtime = IntentRuntime(target="https://report.example", mode="pentest", workspace=workspace)
+            runtime.bootstrap()
+            memory = IntentLangMemory(workspace=str(workspace))
+            report = ReportGenerator(workspace=str(workspace))
+
+            screenshot_path = workspace / "screenshots" / "idor-proof.png"
+            screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+            self._write_test_png(screenshot_path)
+
+            memory.append_artifact_item(
+                "candidate_evidence",
+                {
+                    "kind": "screenshot",
+                    "summary": "ID-based screenshot proof.",
+                    "path": str(screenshot_path),
+                    "finding_id": "finding-123",
+                    "evidence_id": "evidence-456",
+                    "related_finding": "Some Other Title",
+                },
+            )
+            memory.append_verified_finding(
+                title="Order detail IDOR",
+                vuln_type="idor",
+                summary="Unauthorized order access is possible.",
+                severity="中危",
+                test_process="Replay another user's order request after login.",
+                risk_analysis="Attackers can access another user's order details.",
+                remediation="Enforce object-level authorization checks.",
+                target="https://report.example/order/1002/detail",
+                finding_id="finding-123",
+                evidence_id="evidence-456",
+            )
+
+            report_path = Path(report.generate_word_report_from_artifacts("https://report.example"))
+            self.assertTrue(report_path.exists())
+
+            with zipfile.ZipFile(report_path) as archive:
+                media_files = [name for name in archive.namelist() if name.startswith("word/media/")]
+            self.assertTrue(media_files)
+
     def test_generate_report_rejects_html_format(self):
         with TemporaryDirectory() as tempdir:
             report = ReportGenerator(workspace=tempdir)
             result = report.generate_report("https://report.example", [], format="html")
             self.assertEqual(result, "[ERROR] Only docx reports are supported in Phase 1.")
+
+
+class SecurityPolicyE2ETest(unittest.TestCase):
+    def test_validate_command_blocks_dangerous_commands_and_disallowed_hosts(self):
+        with self.assertRaises(SecurityViolation):
+            validate_command("rm -rf /")
+        with self.assertRaises(SecurityViolation):
+            validate_command("curl https://evil.test")
+        self.assertEqual(validate_command("curl https://app.example.com", timeout=12), 12)
+
+    def test_python_executor_blocks_shell_escapes_before_kernel_execution(self):
+        executor = PythonExecutor()
+
+        def _should_not_create_session(_session_name):
+            raise AssertionError("kernel should not start for blocked shell escapes")
+
+        executor._create_session = _should_not_create_session  # type: ignore[method-assign]
+        result = executor.execute_code("blocked", "!curl https://evil.test", timeout=5)
+        self.assertEqual(result[0]["type"], "display_data")
+        self.assertIn("[SECURITY]", result[0]["data"]["text/plain"])
+        self.assertIn("blocked host outside allowlist", result[0]["data"]["text/plain"])
 
 
 if __name__ == "__main__":

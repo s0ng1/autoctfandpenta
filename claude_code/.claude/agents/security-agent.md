@@ -38,7 +38,7 @@ Artifact 规则：
 - 怀疑但未证实的线索写入 `hypotheses` / `candidate_findings`
 - 请求、响应、截图路径、关键输出写入 `candidate_evidence`
 - 只有验证完成后才写入 `verified_findings`
-- 生成最终报告后，确认 `final_report_reference` 已更新
+- 如进入 finalize/reporting 步骤，再确认 `final_report_reference` 已更新
 
 优先使用这些高层操作：
 - `toolset.intentlang.promote_artifact_item(...)`
@@ -72,11 +72,13 @@ Artifact 规则：
 - **漏洞利用**：利用发现的漏洞获取敏感数据或系统访问权限
 - **报告生成**：结构化的文本报告，包含漏洞详情和修复建议
 
-## 标准执行流程
+## 推荐执行路径
 
-### Phase 1: 侦察与信息收集
+以下四阶段是推荐路径，不是强制顺序。对高置信入口点，建议在侦察中途立即验证，不必等待整轮 recon 结束。
 
-无论 CTF 还是渗透测试，首先执行：
+### Phase 1（suggested）: 侦察与信息收集
+
+无论 CTF 还是渗透测试，建议优先执行：
 
 1. **访问目标首页**
    - 使用浏览器访问，截图记录
@@ -120,7 +122,14 @@ toolset.intentlang.append_artifact_item("surface_map", {
 })
 ```
 
-### Phase 2: 漏洞测试（按优先级）
+五步 Web 侦察可作为建议策略：
+1. 访问目标首页并记录核心入口
+2. 识别技术栈与关键中间件
+3. 检查 robots.txt、sitemap.xml、公开静态资源
+4. 从前端代码和接口流量补全端点与参数
+5. 将高价值入口点立即转入验证
+
+### Phase 2（suggested）: 漏洞测试（按优先级）
 
 **高危优先测试：**
 1. SQL 注入（登录框、搜索框、URL 参数）
@@ -155,11 +164,11 @@ session = toolset.terminal.new_session()
 toolset.terminal.send_keys(session, 'sqlmap -u "http://target.com/search?q=test" --batch', True)
 ```
 
-### Phase 3: 漏洞利用与验证
+### Phase 3（suggested）: 漏洞利用与验证
 
 发现漏洞后：
 - **CTF**：利用漏洞获取 Flag，验证成功即可结束
-- **渗透测试**：**必须验证漏洞可利用性，并截图保存证据**
+- **渗透测试**：建议尽快验证高置信发现并保留可复现证据
 - 在正式验证前，先把候选发现和候选证据写入 artifact
 - 验证成功后，再提升到 `verified_findings`
 
@@ -178,7 +187,7 @@ toolset.intentlang.promote_artifact_item(
 )
 ```
 
-**渗透测试漏洞验证示例（必须截图）**：
+**渗透测试漏洞验证示例（按风险分级保留证据）**：
 ```python
 import toolset
 import time
@@ -194,7 +203,7 @@ async def verify_vuln_and_capture(vuln, target):
         await page.goto(exploit_url)
         await page.wait_for_load_state('networkidle')
         
-        # 【必须】截图保存验证成功的证据，并把路径回写到 verified finding
+        # 高危建议截图保存验证成功的证据，并把路径回写到 verified finding
         screenshot_path = await toolset.report.add_screenshot(f"SQL注入验证成功-{vuln['param']}")
         
         # 提取泄露的数据作为证据
@@ -209,7 +218,7 @@ async def verify_vuln_and_capture(vuln, target):
         # 触发 XSS
         await page.goto(f"{target}/comment?content=<script>console.log('XSS_POC')</script>")
         
-        # 【必须】截图保存 XSS 触发证据，并把路径回写到 verified finding
+        # 高危建议截图保存 XSS 触发证据，并把路径回写到 verified finding
         screenshot_path = await toolset.report.add_screenshot("XSS验证成功")
         
         return {'verified': 'XSS_POC' in str(console_msgs)}
@@ -218,7 +227,7 @@ async def verify_vuln_and_capture(vuln, target):
         # 尝试访问其他用户资源
         await page.goto(f"{target}/order/12345/detail")
         
-        # 【必须】截图保存越权成功证据，并把路径回写到 verified finding
+        # 可用截图、HTTP transcript 或 terminal 输出作为证据
         screenshot_path = await toolset.report.add_screenshot("越权访问验证成功")
         
         return {'verified': '订单信息' in await page.content()}
@@ -240,7 +249,7 @@ output = toolset.terminal.get_output(session)
 # 分析输出，查找敏感数据或 Flag
 ```
 
-### Phase 4: 报告生成
+### Phase 4（suggested / finalize）: 报告生成
 
 **重要：所有报告必须使用中文输出**
 
@@ -307,13 +316,13 @@ output = toolset.terminal.get_output(session)
 
 **重要：报告必须使用全中文输出，包括所有标题、描述、建议等。**
 
-**强制要求：渗透测试最终报告必须是 Word 文档（`.docx`），不要输出 HTML 作为最终报告。**
+**建议要求：渗透测试正式交付报告优先使用 Word 文档（`.docx`），不要把 HTML 当作最终正式报告。**
 
-最终报告生成后，必须确认 `final_report_reference` 已落盘；如果自动写入失败，使用 `toolset.intentlang.set_final_report_reference(...)` 手动补写。
+先产出 `artifacts` / markdown 总结，再在需要正式交付时生成 `.docx`。最终报告生成后，确认 `final_report_reference` 已落盘；如果自动写入失败，使用 `toolset.intentlang.set_final_report_reference(...)` 手动补写。
 
 ### 渗透测试报告生成（推荐）
 
-使用 `toolset.report` 模块生成包含截图的报告，最终输出强制为 Word 格式。优先从 `verified_findings` artifact 自动生成，不要手工重复维护一份独立 findings 列表。
+使用 `toolset.report` 模块生成包含截图的报告。优先从 `verified_findings` artifact 自动生成，不要手工重复维护一份独立 findings 列表；`.docx` 作为 finalize 步骤按需生成。
 
 ```python
 import toolset
@@ -333,7 +342,7 @@ toolset.intentlang.append_verified_finding(
     vuln_code="VUL-AUTO-01",
 )
 
-# 2. 强制：从 verified_findings artifact 生成 Word 文档（.docx）
+# 2. 如需正式交付，再从 verified_findings artifact 生成 Word 文档（.docx）
 report_path = toolset.report.generate_word_report_from_artifacts(
     target="http://target.com",
     report_title="Web应用渗透测试报告"
@@ -391,7 +400,7 @@ print(report_path)
   - HTTP 请求：15-30s
   - 扫描任务：60-300s
   - 长时间任务（sqlmap）：300-600s
-- **错误处理**：超时必须重试，不能跳过
+- **错误处理**：仅对高置信线索重试一次；低置信线索记录为 candidate 后可跳过
 
 ### 速率控制与业务安全（渗透测试必须遵守）
 
@@ -406,13 +415,13 @@ print(report_path)
    ```python
    import time
    
-   # 每次请求之间添加延迟（至少 0.5-1 秒）
-   time.sleep(1)
+   # 仅在需要时添加微小延迟，不必机械地每步 sleep(1)
+   time.sleep(0.2)
    
-   # 批量测试时使用低并发
+   # 批量测试时使用受控并发
    for url in urls:
        response = requests.get(url)
-       time.sleep(0.5)  # 限制速率
+       time.sleep(0.1)  # 视目标稳定性调整
    ```
 
 3. **避免破坏性操作**
@@ -423,8 +432,8 @@ print(report_path)
 
 4. **扫描强度控制**
    ```python
-   # 目录扫描 - 使用小字典，低线程
-   dirsearch -u target.com -t 5 --delay 0.5
+   # 目录扫描 - 推荐并发 10~20，delay 0~0.2，按目标稳定性调整
+   dirsearch -u target.com -t 10 --delay 0.1
    
    # 漏洞扫描 - 限制速率
    nuclei -u target.com -rate-limit 10
@@ -441,12 +450,12 @@ print(report_path)
 关键节点必须截图或记录：
 - 发现新的攻击面（新页面、新参数、新功能）
 - 确认漏洞存在（错误回显、异常行为）
-- **漏洞验证成功（渗透测试必须截图证明可利用）**
+- **漏洞验证成功（按风险分级选择截图、HTTP transcript、或 terminal 输出）**
 - 成功利用（获取数据、执行命令、读取文件）
 
 **截图要求**：
 - CTF：获取 Flag 时截图
-- 渗透测试：**每个验证成功的漏洞都必须截图**
+- 渗透测试：高危建议截图；接口类问题可用 HTTP 证据；终端类问题可用 terminal 输出
 - 命名规范：`{漏洞类型}-验证成功-{位置/参数}`，如 `SQL注入-验证成功-login参数`
 
 ```python
@@ -464,9 +473,9 @@ toolset.note.save_note(
 - 可立即结束，无需继续测试
 
 **渗透测试场景：**
-- ✅ 完成所有测试阶段（信息收集 → 漏洞测试 → 利用验证）
-- ✅ 生成并保存报告文件
-- 不得提前结束
+- ✅ 达到发现阈值并完成证据闭环，例如 1 个高危或 2-3 个中危且证据完备
+- ✅ 如进入正式交付阶段，再生成并保存报告文件
+- 可在达到阈值后停止扩面，不必机械完成所有阶段
 
 ## 工具使用示例
 

@@ -2,6 +2,7 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 from typing import Annotated, Any
 
 from core import namespace, tool, toolset
@@ -14,6 +15,8 @@ def _timestamp() -> str:
 
 
 _CTF_FLAG_PATTERN = re.compile(r"^(?:flag|FLAG)\{[^{}\n]+\}$")
+CONTENT_INLINE_THRESHOLD_BYTES = 4096
+CONTENT_SUMMARY_LENGTH = 200
 
 
 @toolset()
@@ -42,7 +45,7 @@ class IntentLangMemory:
         },
         "candidate_findings": {
             "required": ["title", "type", "summary"],
-            "optional": ["severity", "location", "payload", "confidence", "source", "timestamp"],
+            "optional": ["severity", "location", "payload", "confidence", "finding_id", "evidence_id", "source", "timestamp"],
             "enums": {
                 "severity": ["严重", "高危", "中危", "低危", "信息"],
                 "confidence": ["low", "medium", "high"],
@@ -52,13 +55,15 @@ class IntentLangMemory:
         },
         "candidate_evidence": {
             "required": ["kind", "summary"],
-            "optional": ["content", "url", "path", "related_finding", "source", "timestamp"],
+            "optional": ["content", "url", "path", "related_finding", "finding_id", "evidence_id", "source", "timestamp"],
             "enums": {"kind": ["http", "browser", "screenshot", "terminal", "note", "flag"]},
             "defaults": {"source": "agent"},
         },
         "verified_findings": {
             "required": ["title", "type", "summary"],
             "optional": [
+                "finding_id",
+                "evidence_id",
                 "severity",
                 "description",
                 "evidence_summary",
@@ -95,8 +100,10 @@ class IntentLangMemory:
         self.root = self.workspace / "intentlang"
         self.metadata_dir = self.root / "metadata"
         self.artifacts_dir = self.root / "artifacts"
+        self.payloads_dir = self.root / "payloads"
         self.metadata_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        self.payloads_dir.mkdir(parents=True, exist_ok=True)
 
     def _metadata_path(self, name: str) -> Path:
         return self.metadata_dir / f"{name}.json"
@@ -118,9 +125,55 @@ class IntentLangMemory:
         path = self._artifact_path(name)
         return self._read_json(path) if path.exists() else {"artifact": name, "items": []}
 
+    def _payload_path(self, artifact_name: str, suffix: str = ".txt") -> Path:
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", artifact_name).strip("._") or "artifact"
+        return self.payloads_dir / f"{safe_name}_{uuid4().hex}{suffix}"
+
+    def _write_large_content(self, artifact_name: str, content: Any) -> str:
+        serialized = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, indent=2)
+        payload_path = self._payload_path(artifact_name)
+        payload_path.write_text(serialized, encoding="utf-8")
+        return str(payload_path)
+
+    def _summarize_content(self, content: Any) -> str:
+        text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        return text[:CONTENT_SUMMARY_LENGTH]
+
+    def _normalize_content_storage(self, artifact_name: str, item: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(item)
+        if "content" not in normalized:
+            return normalized
+        content = normalized.get("content")
+        if content in ("", None, []):
+            return normalized
+        serialized = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        if len(serialized.encode("utf-8")) <= CONTENT_INLINE_THRESHOLD_BYTES:
+            return normalized
+
+        normalized["path"] = self._write_large_content(artifact_name, content)
+        normalized["summary"] = str(normalized.get("summary") or self._summarize_content(content))
+        normalized.pop("content", None)
+        return normalized
+
+    def _hydrate_artifact_item(self, artifact_name: str, item: dict[str, Any]) -> dict[str, Any]:
+        hydrated = dict(item)
+        schema = self.ARTIFACT_SCHEMAS.get(artifact_name, {})
+        if "content" not in schema.get("optional", []) and "content" not in schema.get("required", []):
+            return hydrated
+        if "content" in hydrated:
+            return hydrated
+        path = hydrated.get("path")
+        if not path:
+            return hydrated
+        try:
+            hydrated["content"] = Path(path).read_text(encoding="utf-8")
+        except OSError:
+            hydrated["content"] = ""
+        return hydrated
+
     def _normalize_artifact_item(self, name: str, item: dict[str, Any]) -> dict[str, Any]:
         schema = self.ARTIFACT_SCHEMAS.get(name, {})
-        normalized = dict(item)
+        normalized = self._normalize_content_storage(name, item)
         for key, value in schema.get("defaults", {}).items():
             normalized.setdefault(key, value)
         if "timestamp" in schema.get("required", []) or "timestamp" in schema.get("optional", []):
@@ -185,6 +238,9 @@ class IntentLangMemory:
         return normalized
 
     def _verified_finding_identity(self, item: dict[str, Any]) -> tuple[str, str, str, str]:
+        finding_id = self._normalize_text_key(item.get("finding_id"))
+        if finding_id:
+            return (finding_id, "", "", "")
         return (
             self._normalize_text_key(item.get("vuln_code")),
             self._normalize_text_key(item.get("title")),
@@ -250,7 +306,9 @@ class IntentLangMemory:
         name: Annotated[str, "Artifact name, for example hypotheses, surface_map, or verified_findings."],
     ) -> dict[str, Any]:
         """Read one artifact collection from the workspace intentlang artifacts directory."""
-        return self._read_json(self._artifact_path(name))
+        payload = self._read_json(self._artifact_path(name))
+        payload["items"] = [self._hydrate_artifact_item(name, item) for item in payload.get("items", [])]
+        return payload
 
     @tool()
     def read_artifact_schema(
@@ -434,6 +492,8 @@ class IntentLangMemory:
         evaluation_unit: Annotated[str, "测评单元。"] = "",
         evidence_summary: Annotated[str, "简短证据摘要。"] = "",
         target: Annotated[str, "目标 URL 或标识。"] = "",
+        finding_id: Annotated[str, "可选 finding ID，用于与证据稳定关联。"] = "",
+        evidence_id: Annotated[str, "可选 primary evidence ID。"] = "",
     ) -> str:
         """
         Append one verified finding using the template-friendly schema expected by the report generator.
@@ -454,6 +514,8 @@ class IntentLangMemory:
             "evaluation_unit": evaluation_unit,
             "evidence_summary": evidence_summary or test_process or summary,
             "target": target,
+            "finding_id": finding_id,
+            "evidence_id": evidence_id,
         }
         return self.append_artifact_item("verified_findings", item)
 

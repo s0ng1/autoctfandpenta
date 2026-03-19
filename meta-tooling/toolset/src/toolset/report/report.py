@@ -77,27 +77,58 @@ class ReportGenerator:
     def _normalize_lookup_key(self, value: str) -> str:
         return " ".join(str(value or "").strip().lower().split())
 
-    def _candidate_screenshot_index(self) -> dict[str, str]:
-        screenshots: dict[str, str] = {}
+    def _candidate_screenshot_indexes(self) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+        by_evidence_id: dict[str, str] = {}
+        by_finding_id: dict[str, str] = {}
+        by_related_finding: dict[str, str] = {}
         for item in self._read_candidate_evidence_artifact():
             if item.get("kind") != "screenshot":
                 continue
             path = str(item.get("path") or item.get("screenshot_path") or "").strip()
+            evidence_id = self._normalize_lookup_key(item.get("evidence_id", ""))
+            finding_id = self._normalize_lookup_key(item.get("finding_id", ""))
             related_finding = self._normalize_lookup_key(item.get("related_finding", ""))
-            if not path or not related_finding or not os.path.exists(path):
+            if not path or not os.path.exists(path):
                 continue
-            screenshots[related_finding] = path
-        return screenshots
+            if evidence_id:
+                by_evidence_id[evidence_id] = path
+            if finding_id:
+                by_finding_id[finding_id] = path
+            if related_finding:
+                by_related_finding[related_finding] = path
+        return by_evidence_id, by_finding_id, by_related_finding
 
     def _finding_title(self, finding: Dict) -> str:
         return str(finding.get("name") or finding.get("title") or "未命名漏洞")
 
-    def _coerce_finding(self, finding: Dict, screenshot_index: dict[str, str] | None = None) -> Dict:
+    def _resolve_screenshot_path(
+        self,
+        finding: Dict,
+        screenshot_indexes: tuple[dict[str, str], dict[str, str], dict[str, str]] | None = None,
+    ) -> str:
+        if finding.get("screenshot_path"):
+            return finding["screenshot_path"]
+        if not screenshot_indexes:
+            return ""
+
+        by_evidence_id, by_finding_id, by_related_finding = screenshot_indexes
+        evidence_id = self._normalize_lookup_key(finding.get("evidence_id", ""))
+        if evidence_id and evidence_id in by_evidence_id:
+            return by_evidence_id[evidence_id]
+
+        finding_id = self._normalize_lookup_key(finding.get("finding_id", ""))
+        if finding_id and finding_id in by_finding_id:
+            return by_finding_id[finding_id]
+
+        return by_related_finding.get(self._normalize_lookup_key(self._finding_title(finding)), "")
+
+    def _coerce_finding(
+        self,
+        finding: Dict,
+        screenshot_indexes: tuple[dict[str, str], dict[str, str], dict[str, str]] | None = None,
+    ) -> Dict:
         title = self._finding_title(finding)
-        screenshot_index = screenshot_index or {}
-        resolved_screenshot = finding.get("screenshot_path", "")
-        if not resolved_screenshot:
-            resolved_screenshot = screenshot_index.get(self._normalize_lookup_key(title), "")
+        resolved_screenshot = self._resolve_screenshot_path(finding, screenshot_indexes)
         evidence = finding.get("evidence")
         if not evidence:
             evidence = finding.get("test_process") or finding.get("evidence_summary") or finding.get("summary", "")
@@ -121,6 +152,8 @@ class ReportGenerator:
             "test_process": finding.get("test_process", evidence),
             "vuln_code": finding.get("vuln_code", ""),
             "target": finding.get("target", ""),
+            "finding_id": finding.get("finding_id", ""),
+            "evidence_id": finding.get("evidence_id", ""),
         }
 
     def _count_severities(self, findings: List[Dict]) -> dict[str, int]:
@@ -314,8 +347,8 @@ class ReportGenerator:
             return "[ERROR] python-docx 未安装，请运行: pip install python-docx"
         if not findings:
             findings = self._read_verified_findings_artifact()
-        screenshot_index = self._candidate_screenshot_index()
-        findings = self._sort_findings([self._coerce_finding(finding, screenshot_index) for finding in findings])
+        screenshot_indexes = self._candidate_screenshot_indexes()
+        findings = self._sort_findings([self._coerce_finding(finding, screenshot_indexes) for finding in findings])
         doc = self._build_default_report(target, findings, report_title)
 
         filename = f"Pentest_Report_{self._safe_filename(target)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"

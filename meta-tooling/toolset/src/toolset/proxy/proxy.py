@@ -1,5 +1,9 @@
-from typing import Annotated
 import base64
+import time
+from typing import Annotated, Any
+from urllib.parse import urlsplit, urlunsplit
+
+import requests
 from gql import gql, Client
 from gql.transport.requests import RequestsHTTPTransport
 
@@ -76,6 +80,95 @@ class Proxy:
             if result['request']['response'] and 'raw' in result['request']['response']:
                 result['request']['response']['raw'] = base64.b64decode(result['request']['response']['raw']).decode('utf-8', errors='replace')
         return result
+
+    def _parse_raw_http_request(self, raw_request: str) -> dict[str, Any]:
+        head, _, body = raw_request.partition("\r\n\r\n")
+        if not _:
+            head, _, body = raw_request.partition("\n\n")
+        lines = [line for line in head.splitlines() if line.strip()]
+        if not lines:
+            raise ValueError("request raw data is empty")
+
+        request_line = lines[0].strip()
+        try:
+            method, target, _version = request_line.split(maxsplit=2)
+        except ValueError as exc:
+            raise ValueError(f"invalid HTTP request line: {request_line}") from exc
+
+        headers: dict[str, str] = {}
+        for line in lines[1:]:
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            headers[key.strip()] = value.strip()
+
+        return {"method": method, "target": target, "headers": headers, "body": body}
+
+    def _build_replay_url(self, request_info: dict[str, Any], parsed_request: dict[str, Any]) -> str:
+        scheme = "https" if request_info.get("isTls") else "http"
+        host = request_info.get("host") or parsed_request["headers"].get("Host", "")
+        port = request_info.get("port")
+        target = parsed_request["target"]
+
+        if target.startswith("http://") or target.startswith("https://"):
+            split = urlsplit(target)
+            scheme = split.scheme
+            host = split.hostname or host
+            port = split.port or port
+            path = urlunsplit(("", "", split.path, split.query, split.fragment))
+        else:
+            path = target
+
+        default_port = 443 if scheme == "https" else 80
+        netloc = host if not port or int(port) == default_port else f"{host}:{port}"
+        return f"{scheme}://{netloc}{path}"
+
+    def _prepare_replay_headers(self, headers: dict[str, str], body: str, overrides: dict[str, Any]) -> tuple[dict[str, str], str]:
+        replay_headers = dict(headers)
+        override_headers = overrides.get("headers", {}) if overrides else {}
+        for key, value in override_headers.items():
+            replay_headers[key] = value
+
+        body = overrides.get("body", body) if overrides else body
+        for transient in ("Host", "Content-Length", "Transfer-Encoding", "Connection"):
+            replay_headers.pop(transient, None)
+        return replay_headers, body
+
+    @tool()
+    def replay_request(self, request_id: str, overrides: dict = None) -> dict:
+        """
+        Replay one captured request with optional method/url/header/body overrides.
+        """
+        overrides = overrides or {}
+        request_payload = self.view_traffic(id=request_id, b64encode=False).get("request")
+        if not request_payload:
+            raise ValueError(f"request not found: {request_id}")
+
+        parsed_request = self._parse_raw_http_request(request_payload.get("raw", ""))
+        method = overrides.get("method", parsed_request["method"])
+        url = overrides.get("url") or self._build_replay_url(request_payload, parsed_request)
+        headers, body = self._prepare_replay_headers(parsed_request["headers"], parsed_request["body"], overrides)
+        timeout = overrides.get("timeout", 30)
+
+        start = time.perf_counter()
+        response = requests.request(
+            method=method,
+            url=url,
+            headers=headers,
+            data=body.encode("utf-8") if isinstance(body, str) else body,
+            timeout=timeout,
+            allow_redirects=overrides.get("allow_redirects", True),
+            verify=overrides.get("verify", False),
+        )
+        duration_ms = int((time.perf_counter() - start) * 1000)
+
+        body_preview = response.text[:1000]
+        return {
+            "status_code": response.status_code,
+            "headers": dict(response.headers),
+            "body_preview": body_preview,
+            "duration_ms": duration_ms,
+        }
 
 
 if __name__ == "__main__":

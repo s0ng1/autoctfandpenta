@@ -1,13 +1,21 @@
 import time
 import os
 import re
+import sys
 import argparse
+from pathlib import Path
 from typing import Annotated, Optional
 from queue import Empty
 import nbformat
 from jupyter_client import KernelManager
 from nbformat import v4 as nbf
 from fastmcp import FastMCP
+
+TOOLSET_SRC = Path(__file__).resolve().parents[1] / "toolset" / "src"
+if str(TOOLSET_SRC) not in sys.path:
+    sys.path.insert(0, str(TOOLSET_SRC))
+
+from security_guard import SecurityViolation, find_python_shell_violations, validate_command
 
 class PythonExecutor:
     def __init__(self, path="scripts"):
@@ -88,7 +96,37 @@ class PythonExecutor:
     def list_sessions(self):
         return list(self.sessions.keys())
 
+    def _security_output(self, message):
+        return [{
+            "type": "display_data",
+            "data": {"text/plain": f"[SECURITY] {message}"},
+        }]
+
+    def _enforce_code_policy(self, code, timeout):
+        violations = find_python_shell_violations(code)
+        if not violations:
+            return None
+
+        messages = []
+        for violation in violations:
+            if violation and violation not in {"os-system", "subprocess-run", "asyncio-subprocess"}:
+                try:
+                    validate_command(violation, timeout=timeout)
+                    messages.append(f"blocked shell escape `!{violation}`; use toolset.terminal.run_command(...) instead")
+                except SecurityViolation as exc:
+                    messages.append(str(exc))
+            elif violation == "os-system":
+                messages.append("blocked os.system(...); use toolset.terminal.run_command(...) instead")
+            elif violation == "subprocess-run":
+                messages.append("blocked subprocess shell execution; use toolset.terminal.run_command(...) instead")
+            elif violation == "asyncio-subprocess":
+                messages.append("blocked asyncio subprocess execution; use toolset.terminal.run_command(...) instead")
+        return self._security_output("; ".join(messages))
+
     def execute_code(self, session_name, code, timeout=10):
+        blocked = self._enforce_code_policy(code, timeout)
+        if blocked is not None:
+            return blocked
         if session_name not in self.sessions:
             self._create_session(session_name)
         
@@ -209,7 +247,7 @@ def execute_code(
     Run Python code in a stateful Jupyter kernel.
 
     - Preserves variables/functions across calls.
-    - Supports magic `%pip` and shell `!cmd`.
+    - Supports Python execution only; shell escapes such as `!cmd`, `os.system`, and `subprocess.run` are blocked and should be routed through `toolset.terminal.run_command(...)`.
     - Built-in toolset library allows you to control the browser, command-line terminal, proxy analysis tools, etc. in the sandbox environment. Execute the following code to view help:
     ```
     import toolset
