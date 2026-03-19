@@ -62,7 +62,8 @@ YuPentestPilot 试图换一种方式：
 - 支持终端会话管理与安全工具调用
 - 支持 HTTP 流量查看
 - 支持持久化笔记记录
-- 支持生成 HTML / Word 格式报告
+- 支持基于模板生成 Word 渗透测试报告
+- 支持 intent-native metadata / artifact 持久化
 - 支持 VNC 观察执行过程
 
 ## Modes
@@ -77,7 +78,7 @@ Agent 会围绕目标 URL 进行侦察、测试和利用，目标是尽快获取
 
 适用于授权的 Web 渗透测试场景。
 
-Agent 会在受控环境中完成从侦察、漏洞发现、漏洞验证到报告输出的完整流程，最终在工作目录中生成中文安全报告。
+Agent 会在受控环境中完成从侦察、漏洞发现、漏洞验证到报告输出的完整流程，最终在工作目录中生成中文 Word 渗透测试报告。
 
 ## Repository Layout
 
@@ -180,7 +181,8 @@ uv run --env-file .env YuPentestPilot.py \
 - `pentest`
   - 重点是完成测试并输出报告
   - 报告会写入工作目录
-  - 当前支持 `.html` 与 `.docx`
+  - 最终报告强制输出为 `.docx`
+  - `intentlang/artifacts/final_report_reference.json` 会记录最终报告路径
 
 ## Tooling
 
@@ -196,9 +198,53 @@ uv run --env-file .env YuPentestPilot.py \
   - 查看浏览器相关 HTTP 流量
 - `toolset.note`
   - 保存与读取持久化笔记
+- `toolset.intentlang`
+  - 读取 runtime metadata
+  - 维护 `recon_summary` / `surface_map` / `verified_findings` 等 artifacts
+  - 提供 `append_verified_finding()`、`upsert_verified_finding()`、`deduplicate_verified_findings()` 等高层写接口
 - `toolset.report`
-  - 生成 HTML / Word 报告
-  - 管理漏洞条目与截图路径
+  - 仅保留基于 `verified_findings` artifact 的模板化 Word 报告主路径
+  - 自动写回 `final_report_reference`
+
+## IntentLang Workflow
+
+当前主流程已经不是单纯依赖 prompt 的临时输出，而是围绕 workspace 中的 `intentlang/` 目录运行：
+
+- `intentlang/metadata/`
+  - 保存 `run`、`strategy`、`intents`、`runtime_objects`、`artifact_schemas`
+  - `pentest` 模式下会自动复制 Word 报告模板到 `pentest_report_template.docx`
+- `intentlang/artifacts/`
+  - 保存 `recon_summary`、`surface_map`、`hypotheses`
+  - 保存 `candidate_findings`、`candidate_evidence`、`verified_findings`
+  - 保存 `final_report_reference`
+
+推荐的 pentest 报告链路：
+
+1. 侦察阶段将结构化结果写入 `surface_map`、`recon_summary`
+2. 验证阶段将候选结果提升到 `verified_findings`
+3. 优先使用 `toolset.intentlang.append_verified_finding()` 或 `upsert_verified_finding()` 写模板友好的字段
+4. 对重复漏洞调用 `toolset.intentlang.deduplicate_verified_findings()` 做归并
+5. 使用 `toolset.report.generate_word_report_from_artifacts()` 直接从 artifact 生成最终 Word 报告
+
+## Testing
+
+当前仓库已补上最小的 repo 内 intent-native 端到端测试，覆盖：
+
+- `YuPentestPilot.main()` 在 `ctf` / `pentest` 下的 bootstrap 与任务注入
+- `verified_findings` 的 upsert / dedup 行为
+- `append_verified_finding -> generate_word_report_from_artifacts -> final_report_reference`
+- `record_ctf_flag -> save_ctf_report -> final_report_reference`
+
+运行方式：
+
+```bash
+./.venv/bin/python -m unittest -v tests.test_intentlang_e2e
+```
+
+补充文档：
+
+- 最新开发记忆见 [docs/latest-memory.md](docs/latest-memory.md)
+- GitHub 更新摘要见 [docs/github-summary.md](docs/github-summary.md)
 
 ## VNC
 
@@ -236,11 +282,9 @@ vnc://127.0.0.1:5901
 
 当前仓库仍然存在一些明显的工程化不足，例如：
 
-- 文档与部分实际实现还没有完全对齐
 - 某些 Agent Prompt 中引用的方法尚未完全落地
 - 报告模块还有进一步加强转义与安全性的空间
 - 启动与异常处理逻辑比较轻量
-- 测试覆盖不足
 - 工具模块之间的边界还可以进一步收敛
 
 如果你希望把它长期维护成一个正式项目，这些部分都值得继续重构。
@@ -296,9 +340,5 @@ YuPentestPilot 的整体方向、核心工程理念以及其中关于 AI for 攻
 **让 Agent 更少地陷入工具调用细节，让代码承担更多执行编排。**
 
 如果你对这条路线感兴趣，建议也去阅读原始分享，再结合这个仓库的实现一起看，会更容易理解它背后的出发点与演化方向。
-
-
-
-
 
 

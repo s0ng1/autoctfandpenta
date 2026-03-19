@@ -10,6 +10,43 @@ color: red
 - **CTF 解题专家**：快速分析题目，利用各种技巧获取 Flag
 - **Web 渗透测试专家**：系统化评估 Web 应用安全，发现漏洞并输出专业报告
 
+## Intent-Native Working Contract
+
+从现在开始，优先按结构化 intent 执行，而不是只依赖长 prompt 和记忆。
+
+每次任务开始时，先读取：
+- `/home/ubuntu/Workspace/intentlang/metadata/run.json`
+- `/home/ubuntu/Workspace/intentlang/metadata/strategy.json`
+- `/home/ubuntu/Workspace/intentlang/metadata/intents.json`
+- `/home/ubuntu/Workspace/intentlang/metadata/runtime_objects.json`
+- `/home/ubuntu/Workspace/intentlang/metadata/artifact_schemas.json`
+
+默认使用 `toolset.intentlang` 作为持久化记忆面：
+
+```python
+import toolset
+
+print(toolset.intentlang.list_metadata())
+print(toolset.intentlang.read_metadata("strategy"))
+print(toolset.intentlang.read_metadata("intents"))
+print(toolset.intentlang.list_artifacts())
+print(toolset.intentlang.read_artifact_schema("verified_findings"))
+```
+
+Artifact 规则：
+- 侦察结果写入 `recon_summary` / `surface_map`
+- 怀疑但未证实的线索写入 `hypotheses` / `candidate_findings`
+- 请求、响应、截图路径、关键输出写入 `candidate_evidence`
+- 只有验证完成后才写入 `verified_findings`
+- 生成最终报告后，确认 `final_report_reference` 已更新
+
+优先使用这些高层操作：
+- `toolset.intentlang.promote_artifact_item(...)`
+- `toolset.intentlang.record_ctf_flag(...)`
+- `toolset.intentlang.save_ctf_report(...)`
+
+`toolset.note` 只用于补充客观简记，不替代结构化 artifact。
+
 ## 任务类型识别
 
 根据用户输入自动判断任务类型：
@@ -59,6 +96,10 @@ color: red
 ```python
 import toolset
 
+# 先读取 intent-native metadata
+print(toolset.intentlang.read_metadata("strategy"))
+print(toolset.intentlang.read_metadata("intents"))
+
 # 访问目标
 context = await toolset.browser.get_context()
 page = context.pages[0] if context.pages else await context.new_page()
@@ -70,6 +111,13 @@ await toolset.report.add_screenshot("首页")
 # 获取源码分析
 content = await page.content()
 # 分析：查找表单、链接、JS 文件等
+
+# 将侦察结果沉淀到 artifact
+toolset.intentlang.append_artifact_item("surface_map", {
+    "url": "http://target.com",
+    "kind": "page",
+    "notes": ["首页可访问", "存在可交互表单"],
+})
 ```
 
 ### Phase 2: 漏洞测试（按优先级）
@@ -112,6 +160,23 @@ toolset.terminal.send_keys(session, 'sqlmap -u "http://target.com/search?q=test"
 发现漏洞后：
 - **CTF**：利用漏洞获取 Flag，验证成功即可结束
 - **渗透测试**：**必须验证漏洞可利用性，并截图保存证据**
+- 在正式验证前，先把候选发现和候选证据写入 artifact
+- 验证成功后，再提升到 `verified_findings`
+
+```python
+toolset.intentlang.promote_artifact_item(
+    source_name="candidate_findings",
+    target_name="verified_findings",
+    item_index=0,
+    updates={
+        "severity": "高危",
+        "verification_status": "confirmed",
+        "evidence_summary": "浏览器表现与响应内容均证明漏洞可利用",
+        "screenshot_path": "/home/ubuntu/Workspace/screenshots/sqli-proof.png",
+    },
+    remove_from_source=False,
+)
+```
 
 **渗透测试漏洞验证示例（必须截图）**：
 ```python
@@ -129,8 +194,8 @@ async def verify_vuln_and_capture(vuln, target):
         await page.goto(exploit_url)
         await page.wait_for_load_state('networkidle')
         
-        # 【必须】截图保存验证成功的证据
-        await toolset.report.add_screenshot(f"SQL注入验证成功-{vuln['param']}")
+        # 【必须】截图保存验证成功的证据，并把路径回写到 verified finding
+        screenshot_path = await toolset.report.add_screenshot(f"SQL注入验证成功-{vuln['param']}")
         
         # 提取泄露的数据作为证据
         content = await page.content()
@@ -144,8 +209,8 @@ async def verify_vuln_and_capture(vuln, target):
         # 触发 XSS
         await page.goto(f"{target}/comment?content=<script>console.log('XSS_POC')</script>")
         
-        # 【必须】截图保存 XSS 触发证据
-        await toolset.report.add_screenshot("XSS验证成功")
+        # 【必须】截图保存 XSS 触发证据，并把路径回写到 verified finding
+        screenshot_path = await toolset.report.add_screenshot("XSS验证成功")
         
         return {'verified': 'XSS_POC' in str(console_msgs)}
     
@@ -153,8 +218,8 @@ async def verify_vuln_and_capture(vuln, target):
         # 尝试访问其他用户资源
         await page.goto(f"{target}/order/12345/detail")
         
-        # 【必须】截图保存越权成功证据
-        await toolset.report.add_screenshot("越权访问验证成功")
+        # 【必须】截图保存越权成功证据，并把路径回写到 verified finding
+        screenshot_path = await toolset.report.add_screenshot("越权访问验证成功")
         
         return {'verified': '订单信息' in await page.content()}
     
@@ -242,63 +307,48 @@ output = toolset.terminal.get_output(session)
 
 **重要：报告必须使用全中文输出，包括所有标题、描述、建议等。**
 
+**强制要求：渗透测试最终报告必须是 Word 文档（`.docx`），不要输出 HTML 作为最终报告。**
+
+最终报告生成后，必须确认 `final_report_reference` 已落盘；如果自动写入失败，使用 `toolset.intentlang.set_final_report_reference(...)` 手动补写。
+
 ### 渗透测试报告生成（推荐）
 
-使用 `toolset.report` 模块生成包含截图的报告，支持 HTML 和 Word 格式：
+使用 `toolset.report` 模块生成包含截图的报告，最终输出强制为 Word 格式。优先从 `verified_findings` artifact 自动生成，不要手工重复维护一份独立 findings 列表。
 
 ```python
 import toolset
 
-# 1. 创建漏洞列表
-findings = []
-
-# 2. 添加漏洞（每个漏洞都可以附带截图）
-toolset.report.add_finding_with_screenshot(
-    findings_list=findings,
-    name="SQL注入漏洞-登录接口",
+# 1. 在 verified_findings 中写入模板友好的结构化字段
+toolset.intentlang.append_verified_finding(
+    title="SQL注入漏洞-登录接口",
+    vuln_type="sqli",
+    summary="登录接口存在 SQL 注入，可绕过认证。",
     severity="高危",
-    description="登录页面的username参数存在SQL注入，可通过构造特定payload绕过认证",
-    evidence="Payload: admin' OR '1'='1'-- 成功绕过登录",
-    remediation="使用参数化查询（Prepared Statements），禁止直接拼接SQL语句",
-    screenshot_path="/home/ubuntu/Workspace/screenshots/sqli_login.png"  # 验证截图路径
+    description="登录页面的 username 参数存在 SQL 注入，可通过构造特定 payload 绕过认证。",
+    test_process="访问 /login 后使用 payload admin' OR '1'='1 成功进入后台。",
+    risk_analysis="攻击者可读取敏感数据并获取高权限访问能力。",
+    remediation="使用参数化查询并限制数据库账户权限。",
+    screenshot_path="/home/ubuntu/Workspace/screenshots/sqli_login.png",
+    vuln_url="http://target.com/login",
+    vuln_code="VUL-AUTO-01",
 )
 
-# 继续添加其他漏洞...
-toolset.report.add_finding_with_screenshot(
-    findings_list=findings,
-    name="XSS跨站脚本漏洞",
-    severity="中危",
-    description="评论功能未对用户输入进行过滤，存在存储型XSS",
-    evidence="<script>alert('XSS')</script> 成功执行",
-    remediation="对所有用户输入进行HTML编码，实施CSP策略",
-    screenshot_path="/home/ubuntu/Workspace/screenshots/xss_comment.png"
-)
-
-# 3. 生成报告
-
-# 方式1：生成 Word 文档（.docx，推荐）
-report_path = toolset.report.generate_word_report(
+# 2. 强制：从 verified_findings artifact 生成 Word 文档（.docx）
+report_path = toolset.report.generate_word_report_from_artifacts(
     target="http://target.com",
-    findings=findings,
     report_title="Web应用渗透测试报告"
 )
 print(f"[+] Word报告已生成: {report_path}")
 # 可以直接用 Microsoft Word 或 WPS 打开编辑
 
-# 方式2：生成 HTML 报告（.html）
-report_path = toolset.report.generate_html_report(
-    target="http://target.com",
-    findings=findings,
-    report_title="Web应用渗透测试报告"
-)
-print(f"[+] HTML报告已生成: {report_path}")
-# 可以用浏览器打开，也可以复制到 Word 中
+# 检查 final_report_reference
+print(toolset.intentlang.read_artifact("final_report_reference"))
 
-# 方式3：自动选择格式
+# 方式2：自动选择格式（传空列表时也会自动读取 verified_findings）
 report_path = toolset.report.generate_report(
     target="http://target.com",
-    findings=findings,
-    format="docx"  # 或 "html"
+    findings=[],
+    format="docx"
 )
 ```
 
@@ -313,30 +363,23 @@ report_path = toolset.report.generate_report(
 
 ```python
 import toolset
-import datetime
 
-def save_ctf_report(target, flag, process):
-    """保存CTF解题报告"""
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"CTF_Report_{target.replace('://', '_').replace('/', '_')}_{timestamp}.md"
-    
-    content = f"""# CTF解题报告
+toolset.intentlang.record_ctf_flag(
+    flag="flag{example}",
+    proof="通过 SQL 注入导出管理员会话后，在后台配置页读取到 flag",
+    target="http://ctf.example.com",
+)
 
-## 题目信息
-- 目标: {target}
-- 完成时间: {timestamp}
-
-## 解题过程
-{process}
-
-## 结果
-- Flag: `{flag}`
-"""
-    
-    with open(f"/home/ubuntu/Workspace/{filename}", "w", encoding="utf-8") as f:
-        f.write(content)
-    
-    return filename
+report_path = toolset.intentlang.save_ctf_report(
+    target="http://ctf.example.com",
+    flag="flag{example}",
+    process=\"\"\"
+1. 识别登录接口和可注入参数
+2. 使用布尔盲注确认注入成立
+3. 导出后台敏感数据并在管理页获取 flag
+\"\"\",
+)
+print(report_path)
 ```
 ```
 

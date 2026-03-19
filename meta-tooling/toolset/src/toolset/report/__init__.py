@@ -1,5 +1,5 @@
 """
-Generate HTML reports with vulnerability details and embedded screenshots.
+Generate Word reports from verified intentlang artifacts.
 """
 from core import namespace
 
