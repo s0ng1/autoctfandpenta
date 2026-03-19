@@ -62,7 +62,7 @@ YuPentestPilot 试图换一种方式：
 - 支持终端会话管理与安全工具调用
 - 支持 HTTP 流量查看
 - 支持持久化笔记记录
-- 支持基于模板生成 Word 渗透测试报告
+- 支持直接从 artifact 生成 Word 渗透测试报告
 - 支持 intent-native metadata / artifact 持久化
 - 支持 VNC 观察执行过程
 
@@ -203,7 +203,7 @@ uv run --env-file .env YuPentestPilot.py \
   - 维护 `recon_summary` / `surface_map` / `verified_findings` 等 artifacts
   - 提供 `append_verified_finding()`、`upsert_verified_finding()`、`deduplicate_verified_findings()` 等高层写接口
 - `toolset.report`
-  - 仅保留基于 `verified_findings` artifact 的模板化 Word 报告主路径
+  - 仅保留基于 `verified_findings` artifact 的 Word 报告主路径
   - 自动写回 `final_report_reference`
 
 ## IntentLang Workflow
@@ -212,7 +212,6 @@ uv run --env-file .env YuPentestPilot.py \
 
 - `intentlang/metadata/`
   - 保存 `run`、`strategy`、`intents`、`runtime_objects`、`artifact_schemas`
-  - `pentest` 模式下会自动复制 Word 报告模板到 `pentest_report_template.docx`
 - `intentlang/artifacts/`
   - 保存 `recon_summary`、`surface_map`、`hypotheses`
   - 保存 `candidate_findings`、`candidate_evidence`、`verified_findings`
@@ -222,7 +221,7 @@ uv run --env-file .env YuPentestPilot.py \
 
 1. 侦察阶段将结构化结果写入 `surface_map`、`recon_summary`
 2. 验证阶段将候选结果提升到 `verified_findings`
-3. 优先使用 `toolset.intentlang.append_verified_finding()` 或 `upsert_verified_finding()` 写模板友好的字段
+3. 优先使用 `toolset.intentlang.append_verified_finding()` 或 `upsert_verified_finding()` 写报告友好的字段
 4. 对重复漏洞调用 `toolset.intentlang.deduplicate_verified_findings()` 做归并
 5. 使用 `toolset.report.generate_word_report_from_artifacts()` 直接从 artifact 生成最终 Word 报告
 
@@ -340,5 +339,4 @@ YuPentestPilot 的整体方向、核心工程理念以及其中关于 AI for 攻
 **让 Agent 更少地陷入工具调用细节，让代码承担更多执行编排。**
 
 如果你对这条路线感兴趣，建议也去阅读原始分享，再结合这个仓库的实现一起看，会更容易理解它背后的出发点与演化方向。
-
 

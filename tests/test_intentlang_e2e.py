@@ -132,7 +132,6 @@ class IntentLangCliE2ETest(unittest.TestCase):
             artifacts_dir = workspace / "intentlang" / "artifacts"
             self.assertTrue((metadata_dir / "run.json").exists())
             self.assertTrue((metadata_dir / "strategy.json").exists())
-            self.assertTrue((metadata_dir / "pentest_report_template.docx").exists())
             self.assertTrue((artifacts_dir / "verified_findings.json").exists())
 
             run_payload = json.loads((metadata_dir / "run.json").read_text(encoding="utf-8"))
@@ -351,6 +350,30 @@ class IntentLangMemoryE2ETest(unittest.TestCase):
             report_ref = memory.read_artifact("final_report_reference")
             self.assertEqual(report_ref["items"][0]["type"], "docx")
             self.assertEqual(report_ref["items"][0]["path"], str(report_path))
+
+    def test_generate_word_report_does_not_require_private_template_file(self):
+        with TemporaryDirectory() as tempdir:
+            workspace = Path(tempdir)
+            runtime = IntentRuntime(target="https://report.example", mode="pentest", workspace=workspace)
+            runtime.bootstrap()
+            memory = IntentLangMemory(workspace=str(workspace))
+            report = ReportGenerator(workspace=str(workspace))
+
+            memory.append_verified_finding(
+                title="IDOR in order detail",
+                vuln_type="idor",
+                summary="Changing the order id exposes another user's record.",
+                severity="中危",
+                test_process="Request /order/1002/detail after logging in as a different user.",
+                risk_analysis="Attackers can view unauthorized order information.",
+                remediation="Enforce object-level authorization checks.",
+                target="https://report.example/order/1002/detail",
+            )
+
+            self.assertFalse((workspace / "intentlang" / "metadata" / "pentest_report_template.docx").exists())
+            report_path = Path(report.generate_word_report_from_artifacts("https://report.example"))
+            self.assertTrue(report_path.exists())
+            self.assertEqual(report_path.suffix, ".docx")
 
     def test_generate_word_report_uses_candidate_evidence_screenshot_when_verified_finding_path_is_missing(self):
         with TemporaryDirectory() as tempdir:

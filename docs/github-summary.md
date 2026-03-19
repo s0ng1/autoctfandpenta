@@ -13,7 +13,7 @@ Key changes:
 - added the internal `intentlang` runtime bootstrap path
 - switched the main runtime to artifact-first execution
 - added structured `toolset.intentlang` access for metadata and artifact operations
-- narrowed pentest reporting to the Word template path only
+- narrowed pentest reporting to the Word docx path only, without requiring a private template file
 - added `verified_findings` upsert / dedup / merge behavior
 - tightened CTF completion rules so only `flag{...}` / `FLAG{...}` count as a real flag
 - added screenshot recovery for pentest reports from `candidate_evidence`

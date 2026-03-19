@@ -5,7 +5,6 @@
 import json
 import os
 import re
-from copy import deepcopy
 from datetime import datetime
 from typing import Annotated, Dict, List, Optional
 
@@ -23,7 +22,6 @@ class ReportGenerator:
     def __init__(self, workspace: str = "/home/ubuntu/Workspace"):
         self.workspace = workspace
         self.screenshots_dir = os.path.join(workspace, "screenshots")
-        self.template_path = os.path.join(workspace, "intentlang", "metadata", "pentest_report_template.docx")
         os.makedirs(self.workspace, exist_ok=True)
         os.makedirs(self.screenshots_dir, exist_ok=True)
 
@@ -166,71 +164,20 @@ class ReportGenerator:
         run = paragraph.add_run()
         run.add_picture(image_path, width=Inches(width_inches))
 
-    def _prune_template_sample_findings(self, doc) -> None:
-        for paragraph in list(doc.paragraphs):
-            if getattr(paragraph.style, "name", "") == "Heading 4":
-                p = paragraph._element
-                p.getparent().remove(p)
-        for table in list(doc.tables[5:]):
-            tbl = table._element
-            tbl.getparent().remove(tbl)
-
-    def _populate_template_front_matter(self, doc, target: str, findings: List[Dict]) -> None:
+    def _report_times(self) -> tuple[str, str]:
         now = datetime.now()
         run_metadata = self._read_run_metadata()
         created_at = run_metadata.get("created_at", "")
         start_time = created_at.replace("T", " ").split("+")[0] if created_at else now.strftime("%Y-%m-%d %H:%M:%S")
         end_time = now.strftime("%Y-%m-%d %H:%M:%S")
-        severity_counts = self._count_severities(findings)
+        return start_time, end_time
 
-        if doc.tables:
-            summary_table = doc.tables[0]
-            severity_rows = {"高危问题": "高危", "中危问题": "中危", "低危问题": "低危"}
-            findings_by_severity = {"高危": [], "中危": [], "低危": []}
-            for finding in findings:
-                sev = finding.get("severity", "信息")
-                if sev in findings_by_severity:
-                    findings_by_severity[sev].append(self._finding_title(finding))
-            for row in summary_table.rows[1:]:
-                key = row.cells[0].text.strip()
-                sev = severity_rows.get(key)
-                if not sev:
-                    continue
-                self._set_cell_text(row.cells[1], f"{severity_counts[sev]}个")
-                self._set_cell_text(row.cells[2], "\n".join(findings_by_severity[sev]))
+    def _set_table_header(self, table, headers: list[str]) -> None:
+        for index, value in enumerate(headers):
+            self._set_cell_text(table.rows[0].cells[index], value)
 
-        if len(doc.tables) > 1:
-            total_table = doc.tables[1]
-            self._set_cell_text(total_table.rows[1].cells[0], f"高危：{severity_counts['高危']}个")
-            self._set_cell_text(total_table.rows[1].cells[1], f"中危：{severity_counts['中危']}个")
-            self._set_cell_text(total_table.rows[1].cells[2], f"低危：{severity_counts['低危']}个")
-            self._set_cell_text(total_table.rows[1].cells[3], f"{len(findings)}个")
-
-        if len(doc.tables) > 2:
-            system_table = doc.tables[2]
-            self._set_cell_text(system_table.rows[1].cells[0], target)
-            self._set_cell_text(system_table.rows[1].cells[1], "授权 Web 应用渗透测试")
-
-        if len(doc.tables) > 3:
-            time_table = doc.tables[3]
-            self._set_cell_text(time_table.rows[1].cells[1], start_time)
-            self._set_cell_text(time_table.rows[1].cells[3], end_time)
-
-        if len(doc.tables) > 4:
-            staff_table = doc.tables[4]
-            self._set_cell_text(staff_table.rows[1].cells[1], "YuPentestPilot")
-            self._set_cell_text(staff_table.rows[1].cells[3], "安全测试运行时")
-            self._set_cell_text(staff_table.rows[1].cells[5], "N/A")
-
-    def _append_template_finding(self, doc, table_template, index: int, finding: Dict, heading_style: str) -> None:
+    def _append_finding_table(self, doc, index: int, finding: Dict) -> None:
         title = self._finding_title(finding)
-        heading = doc.add_paragraph(style=heading_style)
-        heading.add_run(f" {title}")
-
-        new_tbl = deepcopy(table_template._tbl)
-        doc._body._element.insert(-1, new_tbl)
-        table = doc.tables[-1]
-
         control_point = finding.get("control_point") or "待补充"
         evaluation_unit = finding.get("evaluation_unit") or "待补充"
         severity = finding.get("severity", "信息")
@@ -240,17 +187,32 @@ class ReportGenerator:
         description = finding.get("description") or finding.get("summary") or "待补充"
         remediation = finding.get("remediation") or "待补充"
         screenshot_path = finding.get("screenshot_path", "")
+        vuln_url = finding.get("vuln_url", finding.get("url", finding.get("target", "")))
 
-        self._set_cell_text(table.rows[1].cells[0], vuln_code)
-        self._set_cell_text(table.rows[1].cells[1], title)
-        self._set_cell_text(table.rows[1].cells[2], control_point)
-        self._set_cell_text(table.rows[1].cells[3], evaluation_unit)
-        self._set_cell_text(table.rows[1].cells[4], severity)
+        doc.add_heading(f"{index}. {title}", level=2)
+        table = doc.add_table(rows=8, cols=2)
+        table.style = "Table Grid"
+        self._set_table_header(table, ["字段", "内容"])
 
-        self._set_merged_row_content(table, 2, description)
-        self._set_merged_row_content(table, 3, finding.get("vuln_url", finding.get("url", target if (target := finding.get("target")) else "")))
+        fields = [
+            ("漏洞编号", vuln_code),
+            ("漏洞名称", title),
+            ("安全控制点", control_point),
+            ("测评单元", evaluation_unit),
+            ("风险等级", severity),
+            ("漏洞描述", description),
+            ("漏洞链接", vuln_url),
+        ]
+        for row_index, (label, value) in enumerate(fields, start=1):
+            self._set_cell_text(table.rows[row_index].cells[0], label)
+            self._set_cell_text(table.rows[row_index].cells[1], value)
 
-        process_cell = table.rows[4].cells[1]
+        detail_table = doc.add_table(rows=3, cols=2)
+        detail_table.style = "Table Grid"
+        self._set_table_header(detail_table, ["字段", "内容"])
+
+        self._set_cell_text(detail_table.rows[1].cells[0], "测试过程")
+        process_cell = detail_table.rows[1].cells[1]
         process_text = evidence or "已完成漏洞验证，详见截图与相关证据。"
         self._append_text_to_cell(process_cell, process_text)
         if screenshot_path and os.path.exists(screenshot_path):
@@ -261,9 +223,61 @@ class ReportGenerator:
         elif screenshot_path:
             process_cell.add_paragraph(f"[截图文件不存在: {screenshot_path}]")
 
-        self._set_merged_row_content(table, 5, risk)
-        self._set_merged_row_content(table, 6, remediation)
+        self._set_cell_text(detail_table.rows[2].cells[0], "风险分析")
+        self._set_cell_text(detail_table.rows[2].cells[1], risk)
+
+        remediation_table = doc.add_table(rows=2, cols=2)
+        remediation_table.style = "Table Grid"
+        self._set_table_header(remediation_table, ["字段", "内容"])
+        self._set_cell_text(remediation_table.rows[1].cells[0], "修复建议")
+        self._set_cell_text(remediation_table.rows[1].cells[1], remediation)
         doc.add_paragraph()
+
+    def _build_default_report(self, target: str, findings: List[Dict], report_title: str):
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        doc = Document()
+        start_time, end_time = self._report_times()
+        severity_counts = self._count_severities(findings)
+
+        title = doc.add_heading(report_title, 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        intro = doc.add_paragraph()
+        intro.add_run("目标：").bold = True
+        intro.add_run(target)
+
+        time_para = doc.add_paragraph()
+        time_para.add_run("测试时间：").bold = True
+        time_para.add_run(f"{start_time} 至 {end_time}")
+
+        summary = doc.add_paragraph()
+        summary.add_run("执行摘要：").bold = True
+        summary.add_run(f"共确认 {len(findings)} 个已验证安全发现。")
+
+        doc.add_heading("风险汇总", level=1)
+        summary_table = doc.add_table(rows=6, cols=2)
+        summary_table.style = "Table Grid"
+        self._set_table_header(summary_table, ["风险等级", "数量"])
+        summary_rows = [
+            ("严重", str(severity_counts["严重"])),
+            ("高危", str(severity_counts["高危"])),
+            ("中危", str(severity_counts["中危"])),
+            ("低危", str(severity_counts["低危"])),
+            ("信息", str(severity_counts["信息"])),
+        ]
+        for row_index, (severity, count) in enumerate(summary_rows, start=1):
+            self._set_cell_text(summary_table.rows[row_index].cells[0], severity)
+            self._set_cell_text(summary_table.rows[row_index].cells[1], count)
+
+        doc.add_heading("详细发现", level=1)
+        for index, finding in enumerate(findings, start=1):
+            self._append_finding_table(doc, index, finding)
+
+        doc.add_heading("测试结论", level=1)
+        doc.add_paragraph("本次评估已基于 verified_findings artifact 生成正式报告。建议按风险等级优先修复高危和中危问题，并复测验证。")
+        return doc
 
     @tool()
     async def add_screenshot(
@@ -302,17 +316,7 @@ class ReportGenerator:
             findings = self._read_verified_findings_artifact()
         screenshot_index = self._candidate_screenshot_index()
         findings = self._sort_findings([self._coerce_finding(finding, screenshot_index) for finding in findings])
-        if os.path.exists(self.template_path):
-            doc = Document(self.template_path)
-            table_template = doc.tables[5]
-            heading_style = "Heading 4"
-            self._populate_template_front_matter(doc, target, findings)
-            self._prune_template_sample_findings(doc)
-            for idx, finding in enumerate(findings, 1):
-                enriched = {"target": target, **finding}
-                self._append_template_finding(doc, table_template, idx, enriched, heading_style)
-        else:
-            return "[ERROR] Pentest report template not found in workspace metadata."
+        doc = self._build_default_report(target, findings, report_title)
 
         filename = f"Pentest_Report_{self._safe_filename(target)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
         report_path = os.path.join(self.workspace, filename)
@@ -342,7 +346,7 @@ class ReportGenerator:
         report_title: Annotated[str, "报告标题"] = "Web应用渗透测试报告",
     ) -> str:
         """
-        从 verified_findings artifact 自动生成基于模板的 Word 报告。
+        从 verified_findings artifact 自动生成 Word 报告。
         """
         return self.generate_word_report(target=target, findings=[], report_title=report_title)
 

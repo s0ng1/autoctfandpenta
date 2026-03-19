@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,9 +9,6 @@ from typing import Any
 
 def _utc_timestamp() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-TEMPLATE_SOURCE = Path(__file__).resolve().parent.parent / "docs" / "渗透测试报告模板V1.2.docx"
 
 
 @dataclass(slots=True)
@@ -92,7 +88,7 @@ class PentestStrategy(BaseStrategy):
         default_factory=lambda: [
             "final report must be written in Chinese",
             "verified findings must include remediation guidance",
-            "prefer HTML report with embedded screenshots",
+            "final report must be generated as a docx file from structured artifacts",
         ]
     )
 
@@ -224,10 +220,6 @@ class ArtifactStore:
             path = self.artifacts_dir / f"{name}.json"
             if not path.exists():
                 self.write_json(path, {"artifact": name, "items": [], "updated_at": _utc_timestamp()})
-        if TEMPLATE_SOURCE.exists():
-            template_target = self.metadata_dir / "pentest_report_template.docx"
-            if not template_target.exists():
-                shutil.copy2(TEMPLATE_SOURCE, template_target)
 
     def write_json(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
