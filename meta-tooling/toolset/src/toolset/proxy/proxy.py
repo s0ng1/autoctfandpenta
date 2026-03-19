@@ -1,6 +1,5 @@
 from typing import Annotated
 import base64
-import os
 from gql import gql, Client
 from gql.transport.requests import RequestsHTTPTransport
 
@@ -13,7 +12,7 @@ class Proxy:
     def __init__(self, url: str, token: str):
         transport = RequestsHTTPTransport(url=url, headers={'Authorization': f'Bearer {token}'})
         self.__client = Client(transport=transport)
-    
+
     @tool()
     def list_traffic(self, limit: int=5, offset: int=0, filter: Annotated[str, '''Caido HTTPQL statement, such as ' req.host.like:"%.example.com" and req.method.like:"POST" ' ''']=None) -> dict:
         query = gql("""
@@ -53,9 +52,9 @@ class Proxy:
             filter = "preset:no-images and preset:no-styling"
         result = self.__client.execute(query, variable_values={"limit": limit, "offset": offset, "filter": filter})
         return result['interceptEntriesByOffset']
-    
+
     @tool()
-    def view_traffic(self, id: int, b64encode: Annotated[str, "whether the returned traffic needs to be base64 encoded. Generally, not required, so you can view the results directly"]=False) -> dict:
+    def view_traffic(self, id: int, b64encode: Annotated[bool, "whether the returned traffic needs to be base64 encoded. Generally, not required, so you can view the results directly"] = False) -> dict:
         query = gql("""
             query ($id: ID!) {
               request(id: $id) {
@@ -77,7 +76,6 @@ class Proxy:
             if result['request']['response'] and 'raw' in result['request']['response']:
                 result['request']['response']['raw'] = base64.b64decode(result['request']['response']['raw']).decode('utf-8', errors='replace')
         return result
-
 
 
 if __name__ == "__main__":

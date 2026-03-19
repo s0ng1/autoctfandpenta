@@ -1,10 +1,11 @@
 [project]
-name = "tinyctfer"
+name = "yupentestpilot"
 version = "0.1.0"
-description = "Add your description here"
+description = "A lightweight runtime for CTF and web security testing"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "docker>=7.1.0",
     "python-docx>=0.8.11",
 ]
+

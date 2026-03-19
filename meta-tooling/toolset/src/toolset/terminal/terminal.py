@@ -20,7 +20,7 @@ class Terminal:
         session_ids = [session.session_id.replace('$', '') for session in self.server.sessions]
         return session_ids
 
-    @tool()    
+    @tool()
     def kill_session(self, session_id: int):
         """kill a session"""
         session_ids = [session.session_id.replace('$', '') for session in self.server.sessions]
@@ -36,14 +36,16 @@ class Terminal:
         session = self.server.new_session(attach=False, start_directory="/home/ubuntu/Workspace")
         session.set_option('status', 'off')
         session_id = session.session_id.replace('$', '')
-        session_ids = [session.session_id.replace('$', '') for session in self.server.sessions]
         if not os.getenv('NO_VISION'):
-            xfce4_terminal_running = any('xfce4-terminal' in p.name() for p in psutil.process_iter())
-            proc = subprocess.Popen(["xfce4-terminal", "--title", f"AI-Terminal-{session_id}", "--command", f"tmux attach-session -t {session_id}", "--hide-scrollbar"])
-            if xfce4_terminal_running:
-                proc.wait()
-            else:
-                time.sleep(0.5)
+            subprocess.Popen([
+                "xfce4-terminal",
+                "--title",
+                f"AI-Terminal-{session_id}",
+                "--command",
+                f"tmux attach-session -t {session_id}",
+                "--hide-scrollbar",
+            ])
+            time.sleep(0.5)
             session.set_option('destroy-unattached', 'on')
         return int(session_id)
 
@@ -68,29 +70,29 @@ class Terminal:
         Send keys to a terminal session by session id.
 
         Examaple:
-            To execute 'whoami' command: 
+            To execute 'whoami' command:
             ```
             import toolset
 
             toolset.terminal.send_keys(session_id=0, keys="whoami", enter=True)
             ```
 
-            To press Ctrl+c: 
+            To press Ctrl+c:
             ```
             toolset.terminal.send_keys(session_id=0, keys="C-c", enter=False)
             ```
-            
+
             To press Esc:
             ```
             toolset.terminal.send_keys(session_id=0, keys="C-[", enter=False)
             ```
 
-            To press up arrow: 
+            To press up arrow:
             ```
             toolset.terminal.send_keys(session_id=0, keys="C-Up", enter=False)
             ```
 
-            To press tab: 
+            To press tab:
             ```
             toolset.terminal.send_keys(session_id=0, keys="C-i", enter=False)
             ```
@@ -105,4 +107,3 @@ class Terminal:
         session.windows[0].panes[0].send_keys(keys, enter=enter)
         time.sleep(1)
         return '\n'.join(session.windows[0].panes[0].capture_pane())
-

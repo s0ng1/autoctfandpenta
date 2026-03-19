@@ -1,54 +1,274 @@
-[![badge](./README/badge.png)](https://zc.tencent.com/competition/competitionHackathon?code=cha004)
+# YuPentestPilot
 
-## 使用方法
+YuPentestPilot 是一个面向 CTF 与 Web 安全测试场景的轻量运行时。
 
-1. 下载沙盒镜像：
+它的核心思路不是让 Agent 在“读工具文档 -> 调一个工具 -> 解析结果 -> 再调下一个工具”的循环里消耗上下文，而是给 Agent 一个受控沙箱，再提供一套可编排的 Python 执行环境，让它直接通过代码组织浏览器、终端、流量分析、笔记和报告能力。
 
-   ```bash
-   docker pull ghcr.io/l3yx/sandbox:latest
-   docker tag ghcr.io/l3yx/sandbox:latest l3yx/sandbox:latest
-   
-   # 或者使用加速地址:
-   # docker pull ghcr.nju.edu.cn/l3yx/sandbox:latest
-   # docker tag ghcr.nju.edu.cn/l3yx/sandbox:latest l3yx/sandbox:latest
-   ```
+这个仓库是从实际比赛与实验环境中抽离出的精简版本，重点是把核心链路开源出来，方便复现、学习和继续改造。
 
-2. 创建.env文件并填入LLM Key（这里可以使用任意厂商的 Anthropic 兼容 api ）：
+## Why YuPentestPilot
 
-   ```
-   cp .env.example .env
-   ```
+传统 Agent Tool Use 往往会遇到几个问题：
 
-   
+- 工具调用链很长，上下文容易被中间结果污染
+- 多工具协同时，推理过程会被大量机械步骤打断
+- 安全测试任务天然需要浏览器、终端、流量、笔记、报告多种能力联动
+- 一旦任务变复杂，单轮单工具式调用会越来越笨重
 
-   可以提前使用以下命令进入容器检查 api 和 key 的可用性，如果不可用的话直接启动 tinyctfer.py 会无响应很久（Claude Code 设计问题，会一直重试连接）
+YuPentestPilot 试图换一种方式：
 
-   ```
-   docker run --rm -ti --entrypoint bash l3yx/sandbox:latest
-   
-   ANTHROPIC_MODEL=GLM-4.6 ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic ANTHROPIC_AUTH_TOKEN=xxx claude hello
-   ```
+**Agent 负责表达意图，Python 代码负责组织执行。**
 
-3. 指定CTF题目地址和工作目录，启动：
+也就是说，Agent 不再只是一段“逐步调用工具的对话”，而是可以在沙箱里写小段 Python，把多种能力串起来完成实际任务。
 
-   ```bash
-   uv run --env-file .env tinyctfer.py --ctf http://target.example.com --workspace workspace
-   ```
+## Core Idea
 
-​	测试题目是：https://buuoj.cn/challenges#BUU%20XXE%20COURSE%201
+整体链路如下：
 
-​	这个版本默认开启 VNC 服务，可以直观查看解题步骤。（比赛时是多容器并行，为节省性能不开UI）
+1. 宿主机启动 `YuPentestPilot.py`
+2. Python 脚本拉起 Docker 沙箱
+3. 容器内运行 Claude Code
+4. Claude 通过 MCP 调用 Python Executor
+5. Python Executor 在状态化会话中执行代码
+6. 代码通过 `toolset` 调用浏览器、终端、代理、笔记、报告等能力
 
-​	目前设定的 Claude Code SubAgent 比较耦合，只能用于解CTF，且唯一目标就是找到 flag。后面如果发布正式的版本会支持自定义的安全测试任务甚至通用任务。
+对应到仓库结构，大致分成三层：
 
-![image-20251205040854944](./README/image-20251205040854944.png)
+- **调度层**
+  - `YuPentestPilot.py`
+  - 负责启动容器、注入任务、挂载工作目录
+- **执行层**
+  - `meta-tooling/service/python_executor_mcp.py`
+  - 提供状态化 Python 执行能力
+- **能力层**
+  - `meta-tooling/toolset/src/toolset`
+  - 提供 browser / terminal / proxy / note / report 等工具集
 
-![image-20251205041013949](./README/image-20251205041013949.png)
+## Features
+
+当前版本已经具备以下能力：
+
+- 支持 `ctf` 与 `pentest` 两种模式
+- 基于 Docker 的隔离沙箱运行
+- 通过 Claude Code 驱动任务执行
+- 通过 MCP 暴露状态化 Python 执行环境
+- 支持浏览器自动化与页面交互
+- 支持终端会话管理与安全工具调用
+- 支持 HTTP 流量查看
+- 支持持久化笔记记录
+- 支持生成 HTML / Word 格式报告
+- 支持 VNC 观察执行过程
+
+## Modes
+
+### CTF Mode
+
+适用于 Web CTF 或类似夺旗场景。
+
+Agent 会围绕目标 URL 进行侦察、测试和利用，目标是尽快获取 flag。拿到 flag 后即可结束，不要求继续做完整评估。
+
+### Pentest Mode
+
+适用于授权的 Web 渗透测试场景。
+
+Agent 会在受控环境中完成从侦察、漏洞发现、漏洞验证到报告输出的完整流程，最终在工作目录中生成中文安全报告。
+
+## Repository Layout
+
+```text
+.
+├─ YuPentestPilot.py
+├─ tinyctfer.py                  # 兼容旧入口
+├─ claude_code/
+│  ├─ .mcp.json
+│  └─ .claude/
+├─ meta-tooling/
+│  ├─ service/
+│  └─ toolset/
+├─ README/
+├─ .env.example
+├─ pyproject.toml
+└─ README.md
+```
+
+关键目录说明：
+
+- `YuPentestPilot.py`
+  - 项目主入口
+- `claude_code/`
+  - Claude Code 配置、MCP 配置、Agent Prompt
+- `meta-tooling/service/`
+  - MCP 服务和浏览器服务
+- `meta-tooling/toolset/`
+  - 浏览器、终端、流量、笔记、报告等工具实现
+
+## Quick Start
+
+### 1. 拉取沙箱镜像
+
+```bash
+docker pull ghcr.io/l3yx/sandbox:latest
+docker tag ghcr.io/l3yx/sandbox:latest l3yx/sandbox:latest
+```
+
+### 2. 安装依赖
+
+推荐使用 `uv`：
+
+```bash
+uv sync
+```
+
+### 3. 配置环境变量
+
+复制示例配置：
+
+```bash
+cp .env.example .env
+```
+
+填写你可用的 Anthropic 兼容接口配置：
+
+- `ANTHROPIC_BASE_URL`
+- `ANTHROPIC_AUTH_TOKEN`
+- `ANTHROPIC_MODEL`
+
+### 4. 启动任务
+
+CTF 模式：
+
+```bash
+uv run --env-file .env YuPentestPilot.py \
+  --ctf http://target.example.com \
+  --workspace workspace \
+  --mode ctf
+```
+
+Pentest 模式：
+
+```bash
+uv run --env-file .env YuPentestPilot.py \
+  --ctf http://target.example.com \
+  --workspace workspace \
+  --mode pentest
+```
+
+## Arguments
+
+- `--ctf`
+  - 目标 URL
+- `--workspace`
+  - 本地工作目录，会挂载到容器内 `/home/ubuntu/Workspace`
+- `--mode`
+  - 运行模式，可选 `ctf` 或 `pentest`
+- `--vnc-port`
+  - VNC 端口，默认 `5901`
+
+## Output
+
+在不同模式下，输出内容略有区别：
+
+- `ctf`
+  - 重点是获得 flag
+  - 终端会打印最终执行结果
+- `pentest`
+  - 重点是完成测试并输出报告
+  - 报告会写入工作目录
+  - 当前支持 `.html` 与 `.docx`
+
+## Tooling
+
+当前 `toolset` 提供以下核心能力：
+
+- `toolset.browser`
+  - 获取 Playwright 浏览器上下文
+  - 适合页面访问、交互、源码查看、控制台监听
+- `toolset.terminal`
+  - 基于 tmux 管理终端会话
+  - 可用于执行 httpx、katana、ffuf、sqlmap 等工具
+- `toolset.proxy`
+  - 查看浏览器相关 HTTP 流量
+- `toolset.note`
+  - 保存与读取持久化笔记
+- `toolset.report`
+  - 生成 HTML / Word 报告
+  - 管理漏洞条目与截图路径
+
+## VNC
+
+当前版本默认启用 VNC，便于观察浏览器与终端中的执行过程。
+
+示例地址：
+
+```text
+vnc://127.0.0.1:5901
+```
+
+默认密码：
+
+```text
+123456
+```
+
+## Project Status
+
+这个仓库目前更接近：
+
+- 一个可运行的原型
+- 一个面向安全测试场景的 Agent Runtime 示例
+- 一个展示 “Intent Engineering + Meta-Tooling” 思路的开源版本
+
+它还不是一个已经充分工程化、稳定性完善、接口完全收敛的正式产品。
+
+换句话说，这个版本更适合：
+
+- 学习整体设计
+- 复现运行链路
+- 在此基础上继续二次开发
+
+## Known Limitations
+
+当前仓库仍然存在一些明显的工程化不足，例如：
+
+- 文档与部分实际实现还没有完全对齐
+- 某些 Agent Prompt 中引用的方法尚未完全落地
+- 报告模块还有进一步加强转义与安全性的空间
+- 启动与异常处理逻辑比较轻量
+- 测试覆盖不足
+- 工具模块之间的边界还可以进一步收敛
+
+如果你希望把它长期维护成一个正式项目，这些部分都值得继续重构。
+
+## Safety Notice
+
+请仅在**明确授权**的范围内使用本项目。
+
+尤其在 `pentest` 模式下，应避免：
+
+- DoS / DDoS
+- 高并发扫描或爆破
+- 破坏性数据修改
+- 超出授权范围的端口与网络探测
+
+这个项目的目标是服务于受控研究、学习和授权测试，而不是绕过授权边界。
+
+## Future Work
+
+后续比较值得继续推进的方向包括：
+
+- 更稳定的运行时管理
+- 更清晰的工具接口设计
+- 更低耦合的 Agent Prompt
+- 更完整的截图与报告链路
+- 更好的错误处理与日志体系
+- 更完善的自动化测试
+
+## Acknowledgement
+
+YuPentestPilot 的价值不只在于“自动化解题”或“自动化测试”，更在于它尝试展示一种更适合复杂任务的 Agent Runtime 设计方式：
+
+**让 Agent 更少地陷入工具调用细节，让代码承担更多执行编排。**
+
+如果你对这条路线感兴趣，欢迎继续基于这个仓库做实验、重构和扩展。
 
 
-
-## 其他
-
-比赛时的调度和运行代码是我和 AI 混合编写的，包含任务并行，题目优先排序，多次失败后提示词动态变换，hint 获取策略，LLM 和 Agent switch 机制等，代码很杂乱，这个仓库的代码是我将核心部分单独抽离出来的版本，方便大家复现和学习。但是代码也比较潦草，最近确实没有时间好好整理，但又不能一直不开源，所以先简单梳理了一下，后续可能会重构，开源一个正式的项目。
-
-赛前写的很匆忙，这个项目中对 Meta-Tooling 的实现还有非常大的优化空间，欢迎各位大佬一起来交流讨论。
