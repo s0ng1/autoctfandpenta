@@ -5,6 +5,7 @@ import sys
 import types
 import unittest
 import zipfile
+from builtins import __import__ as builtin_import
 from base64 import b64decode
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -449,6 +450,42 @@ class IntentLangMemoryE2ETest(unittest.TestCase):
             self.assertTrue(report_path.exists())
             self.assertEqual(report_path.suffix, ".docx")
 
+    def test_generate_word_report_falls_back_to_markdown_when_docx_dependency_is_missing(self):
+        with TemporaryDirectory() as tempdir:
+            workspace = Path(tempdir)
+            runtime = IntentRuntime(target="https://report.example", mode="pentest", workspace=workspace)
+            runtime.bootstrap()
+            memory = IntentLangMemory(workspace=str(workspace))
+            report = ReportGenerator(workspace=str(workspace))
+
+            memory.append_verified_finding(
+                title="Open Redirect in redirect endpoint",
+                vuln_type="logic",
+                summary="The redirect endpoint accepts arbitrary external targets.",
+                severity="中危",
+                test_process="Submit ?next=https://evil.example and observe external redirect.",
+                risk_analysis="Attackers can abuse trust relationships for phishing.",
+                remediation="Restrict redirects to an allowlist.",
+                target="https://report.example/redirect",
+            )
+
+            def _import_without_docx(name, globals=None, locals=None, fromlist=(), level=0):
+                if name == "docx":
+                    raise ImportError("docx unavailable in sandbox")
+                return builtin_import(name, globals, locals, fromlist, level)
+
+            with patch("builtins.__import__", side_effect=_import_without_docx):
+                report_path = Path(report.generate_word_report_from_artifacts("https://report.example"))
+
+            self.assertTrue(report_path.exists())
+            self.assertEqual(report_path.suffix, ".md")
+            report_text = report_path.read_text(encoding="utf-8")
+            self.assertIn("python-docx 不可用", report_text)
+
+            report_ref = memory.read_artifact("final_report_reference")
+            self.assertEqual(report_ref["items"][0]["type"], "md")
+            self.assertEqual(report_ref["items"][0]["path"], str(report_path))
+
     def test_generate_word_report_uses_candidate_evidence_screenshot_when_verified_finding_path_is_missing(self):
         with TemporaryDirectory() as tempdir:
             workspace = Path(tempdir)
@@ -531,11 +568,35 @@ class IntentLangMemoryE2ETest(unittest.TestCase):
                 media_files = [name for name in archive.namelist() if name.startswith("word/media/")]
             self.assertTrue(media_files)
 
-    def test_generate_report_rejects_html_format(self):
+    def test_generate_report_supports_html_format(self):
         with TemporaryDirectory() as tempdir:
+            workspace = Path(tempdir)
+            runtime = IntentRuntime(target="https://report.example", mode="pentest", workspace=workspace)
+            runtime.bootstrap()
+            memory = IntentLangMemory(workspace=str(workspace))
             report = ReportGenerator(workspace=tempdir)
-            result = report.generate_report("https://report.example", [], format="html")
-            self.assertEqual(result, "[ERROR] Only docx reports are supported in Phase 1.")
+
+            memory.append_verified_finding(
+                title="Directory Listing Enabled",
+                vuln_type="other",
+                summary="Web server exposes index listing.",
+                severity="低危",
+                test_process="Browse to /uploads/ and observe auto-generated directory listing.",
+                risk_analysis="Attackers can enumerate uploaded content and internal filenames.",
+                remediation="Disable directory indexing on the web server.",
+                target="https://report.example/uploads/",
+            )
+
+            report_path = Path(report.generate_report("https://report.example", [], format="html"))
+            self.assertTrue(report_path.exists())
+            self.assertEqual(report_path.suffix, ".html")
+            report_text = report_path.read_text(encoding="utf-8")
+            self.assertIn("<html", report_text)
+            self.assertIn("Directory Listing Enabled", report_text)
+
+            report_ref = memory.read_artifact("final_report_reference")
+            self.assertEqual(report_ref["items"][0]["type"], "html")
+            self.assertEqual(report_ref["items"][0]["path"], str(report_path))
 
 
 class SecurityPolicyE2ETest(unittest.TestCase):

@@ -1,5 +1,5 @@
 """
-Generate Word reports from verified intentlang artifacts.
+Generate docx / markdown / html reports from verified intentlang artifacts.
 """
 from core import namespace
 

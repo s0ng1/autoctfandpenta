@@ -107,7 +107,7 @@ class PentestStrategy(BaseStrategy):
         default_factory=lambda: [
             "final report must be written in Chinese",
             "verified findings must include remediation guidance",
-            "generate structured artifacts first and produce a docx report as an optional finalize step when needed",
+            "generate structured artifacts first and prefer a docx report as the finalize step; fall back to markdown or html if docx tooling is unavailable",
         ]
     )
 
@@ -214,7 +214,7 @@ class ArtifactStore:
         "final_report_reference": {
             "required": ["path", "type"],
             "optional": ["summary", "target", "total_findings", "recorded_at"],
-            "enums": {"type": ["docx", "md"]},
+            "enums": {"type": ["docx", "md", "html"]},
         },
     }
 
@@ -419,7 +419,7 @@ class IntentRuntime:
                     "You may stop expanding coverage once you have either 1 high-risk finding or 2-3 medium-risk findings with complete evidence.",
                     "The final report MUST be written entirely in Chinese.",
                     "Generate artifacts/markdown first; create a Word document (.docx) only as a finalize step when needed.",
-                    "Use toolset.report.generate_word_report() for the final docx when the reporting step is requested or required.",
+                    "Prefer toolset.report.generate_word_report() for the final deliverable; if docx dependencies are unavailable, generate a markdown or html report instead of blocking on package installation.",
                 ]
             )
             if self.mode == "pentest"

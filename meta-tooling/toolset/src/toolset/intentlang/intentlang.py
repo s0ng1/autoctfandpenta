@@ -91,7 +91,7 @@ class IntentLangMemory:
         "final_report_reference": {
             "required": ["path", "type"],
             "optional": ["summary", "target", "total_findings", "recorded_at"],
-            "enums": {"type": ["docx", "md"]},
+            "enums": {"type": ["docx", "md", "html"]},
         },
     }
 

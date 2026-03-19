@@ -6,6 +6,7 @@ import json
 import os
 import re
 from datetime import datetime
+from html import escape
 from typing import Annotated, Dict, List, Optional
 
 from core import namespace, tool, toolset
@@ -50,6 +51,17 @@ class ReportGenerator:
         with open(artifact_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
             f.write("\n")
+
+    def _normalize_findings(self, findings: List[Dict]) -> List[Dict]:
+        if not findings:
+            findings = self._read_verified_findings_artifact()
+        screenshot_indexes = self._candidate_screenshot_indexes()
+        return self._sort_findings([self._coerce_finding(finding, screenshot_indexes) for finding in findings])
+
+    def _report_filename(self, target: str, extension: str) -> str:
+        safe_target = self._safe_filename(target)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"Pentest_Report_{safe_target}_{timestamp}.{extension}"
 
     def _read_run_metadata(self) -> dict:
         metadata_path = os.path.join(self.workspace, "intentlang", "metadata", "run.json")
@@ -312,6 +324,150 @@ class ReportGenerator:
         doc.add_paragraph("本次评估已基于 verified_findings artifact 生成正式报告。建议按风险等级优先修复高危和中危问题，并复测验证。")
         return doc
 
+    def _build_markdown_report(
+        self,
+        target: str,
+        findings: List[Dict],
+        report_title: str,
+        fallback_reason: str = "",
+    ) -> str:
+        start_time, end_time = self._report_times()
+        severity_counts = self._count_severities(findings)
+        lines = [
+            f"# {report_title}",
+            "",
+            f"- 目标: {target}",
+            f"- 测试时间: {start_time} 至 {end_time}",
+            f"- 已验证发现数量: {len(findings)}",
+        ]
+        if fallback_reason:
+            lines.append(f"- 说明: {fallback_reason}")
+        lines.extend(
+            [
+                "",
+                "## 风险汇总",
+                "",
+                "| 风险等级 | 数量 |",
+                "| --- | --- |",
+                f"| 严重 | {severity_counts['严重']} |",
+                f"| 高危 | {severity_counts['高危']} |",
+                f"| 中危 | {severity_counts['中危']} |",
+                f"| 低危 | {severity_counts['低危']} |",
+                f"| 信息 | {severity_counts['信息']} |",
+                "",
+                "## 详细发现",
+                "",
+            ]
+        )
+
+        if not findings:
+            lines.extend(["当前未发现已验证漏洞。", ""])
+        else:
+            for index, finding in enumerate(findings, start=1):
+                title = self._finding_title(finding)
+                lines.extend(
+                    [
+                        f"### {index}. {title}",
+                        "",
+                        f"- 风险等级: {finding.get('severity', '信息')}",
+                        f"- 漏洞链接: {finding.get('url', '') or finding.get('target', '') or '待补充'}",
+                        f"- 漏洞描述: {finding.get('description', '待补充')}",
+                        f"- 测试过程: {finding.get('test_process') or finding.get('evidence') or '待补充'}",
+                        f"- 风险分析: {finding.get('risk_analysis') or finding.get('impact') or '待补充'}",
+                        f"- 修复建议: {finding.get('remediation', '待补充')}",
+                    ]
+                )
+                screenshot_path = finding.get("screenshot_path", "")
+                if screenshot_path:
+                    lines.append(f"- 截图: {screenshot_path}")
+                lines.append("")
+
+        lines.extend(
+            [
+                "## 测试结论",
+                "",
+                "本次评估已基于 verified_findings artifact 生成正式报告。建议按风险等级优先修复高危和中危问题，并复测验证。",
+                "",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _build_html_report(
+        self,
+        target: str,
+        findings: List[Dict],
+        report_title: str,
+        fallback_reason: str = "",
+    ) -> str:
+        start_time, end_time = self._report_times()
+        severity_counts = self._count_severities(findings)
+        summary_rows = "".join(
+            f"<tr><td>{escape(level)}</td><td>{count}</td></tr>"
+            for level, count in [
+                ("严重", severity_counts["严重"]),
+                ("高危", severity_counts["高危"]),
+                ("中危", severity_counts["中危"]),
+                ("低危", severity_counts["低危"]),
+                ("信息", severity_counts["信息"]),
+            ]
+        )
+
+        finding_blocks: list[str] = []
+        for index, finding in enumerate(findings, start=1):
+            screenshot_html = ""
+            screenshot_path = finding.get("screenshot_path", "")
+            if screenshot_path:
+                screenshot_html = f"<p><strong>截图:</strong> {escape(str(screenshot_path))}</p>"
+            finding_blocks.append(
+                "\n".join(
+                    [
+                        "<section class=\"finding\">",
+                        f"<h3>{index}. {escape(self._finding_title(finding))}</h3>",
+                        f"<p><strong>风险等级:</strong> {escape(str(finding.get('severity', '信息')))}</p>",
+                        f"<p><strong>漏洞链接:</strong> {escape(str(finding.get('url', '') or finding.get('target', '') or '待补充'))}</p>",
+                        f"<p><strong>漏洞描述:</strong> {escape(str(finding.get('description', '待补充')))}</p>",
+                        f"<p><strong>测试过程:</strong> {escape(str(finding.get('test_process') or finding.get('evidence') or '待补充'))}</p>",
+                        f"<p><strong>风险分析:</strong> {escape(str(finding.get('risk_analysis') or finding.get('impact') or '待补充'))}</p>",
+                        f"<p><strong>修复建议:</strong> {escape(str(finding.get('remediation', '待补充')))}</p>",
+                        screenshot_html,
+                        "</section>",
+                    ]
+                )
+            )
+
+        fallback_html = ""
+        if fallback_reason:
+            fallback_html = f"<p><strong>说明:</strong> {escape(fallback_reason)}</p>"
+
+        findings_html = "\n".join(finding_blocks) if finding_blocks else "<p>当前未发现已验证漏洞。</p>"
+        return "\n".join(
+            [
+                "<!DOCTYPE html>",
+                "<html lang=\"zh-CN\">",
+                "<head>",
+                "<meta charset=\"utf-8\">",
+                f"<title>{escape(report_title)}</title>",
+                "<style>body{font-family:Arial,sans-serif;max-width:960px;margin:40px auto;padding:0 16px;line-height:1.6}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:8px;text-align:left}.finding{margin:24px 0;padding:16px;border:1px solid #ddd;border-radius:8px}</style>",
+                "</head>",
+                "<body>",
+                f"<h1>{escape(report_title)}</h1>",
+                f"<p><strong>目标:</strong> {escape(target)}</p>",
+                f"<p><strong>测试时间:</strong> {escape(start_time)} 至 {escape(end_time)}</p>",
+                f"<p><strong>已验证发现数量:</strong> {len(findings)}</p>",
+                fallback_html,
+                "<h2>风险汇总</h2>",
+                "<table><thead><tr><th>风险等级</th><th>数量</th></tr></thead><tbody>",
+                summary_rows,
+                "</tbody></table>",
+                "<h2>详细发现</h2>",
+                findings_html,
+                "<h2>测试结论</h2>",
+                "<p>本次评估已基于 verified_findings artifact 生成正式报告。建议按风险等级优先修复高危和中危问题，并复测验证。</p>",
+                "</body>",
+                "</html>",
+            ]
+        )
+
     @tool()
     async def add_screenshot(
         self,
@@ -344,17 +500,59 @@ class ReportGenerator:
         try:
             from docx import Document
         except ImportError:
-            return "[ERROR] python-docx 未安装，请运行: pip install python-docx"
-        if not findings:
-            findings = self._read_verified_findings_artifact()
-        screenshot_indexes = self._candidate_screenshot_indexes()
-        findings = self._sort_findings([self._coerce_finding(finding, screenshot_indexes) for finding in findings])
+            return self.generate_markdown_report(
+                target=target,
+                findings=findings,
+                report_title=report_title,
+                fallback_reason="python-docx 不可用，已自动降级为 Markdown 报告。",
+            )
+        findings = self._normalize_findings(findings)
         doc = self._build_default_report(target, findings, report_title)
 
-        filename = f"Pentest_Report_{self._safe_filename(target)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+        filename = self._report_filename(target, "docx")
         report_path = os.path.join(self.workspace, filename)
         doc.save(report_path)
         self._write_final_report_reference(report_path, "docx", target, len(findings))
+        return report_path
+
+    @tool()
+    def generate_markdown_report(
+        self,
+        target: Annotated[str, "测试目标 URL"],
+        findings: Annotated[List[Dict], "漏洞发现列表；若传空列表则自动从 verified_findings artifact 读取"],
+        report_title: Annotated[str, "报告标题"] = "Web应用渗透测试报告",
+        fallback_reason: Annotated[str, "降级或补充说明"] = "",
+    ) -> str:
+        """
+        生成 Markdown 报告 (.md)
+        """
+        findings = self._normalize_findings(findings)
+        report_body = self._build_markdown_report(target, findings, report_title, fallback_reason)
+        filename = self._report_filename(target, "md")
+        report_path = os.path.join(self.workspace, filename)
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(report_body)
+        self._write_final_report_reference(report_path, "md", target, len(findings))
+        return report_path
+
+    @tool()
+    def generate_html_report(
+        self,
+        target: Annotated[str, "测试目标 URL"],
+        findings: Annotated[List[Dict], "漏洞发现列表；若传空列表则自动从 verified_findings artifact 读取"],
+        report_title: Annotated[str, "报告标题"] = "Web应用渗透测试报告",
+        fallback_reason: Annotated[str, "降级或补充说明"] = "",
+    ) -> str:
+        """
+        生成 HTML 报告 (.html)
+        """
+        findings = self._normalize_findings(findings)
+        report_body = self._build_html_report(target, findings, report_title, fallback_reason)
+        filename = self._report_filename(target, "html")
+        report_path = os.path.join(self.workspace, filename)
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(report_body)
+        self._write_final_report_reference(report_path, "html", target, len(findings))
         return report_path
 
     @tool()
@@ -363,14 +561,19 @@ class ReportGenerator:
         target: Annotated[str, "测试目标 URL"],
         findings: Annotated[List[Dict], "漏洞发现列表；若传空列表则自动从 verified_findings artifact 读取"],
         report_title: Annotated[str, "报告标题"] = "Web应用渗透测试报告",
-        format: Annotated[str, "报告格式，仅支持 docx"] = "docx",
+        format: Annotated[str, "报告格式，支持 docx / md / html"] = "docx",
     ) -> str:
         """
-        生成报告。Phase 1 仅保留 Word 主路径。
+        生成报告。优先支持 docx，必要时可使用 markdown 或 html。
         """
-        if format.lower() != "docx":
-            return "[ERROR] Only docx reports are supported in Phase 1."
-        return self.generate_word_report(target, findings, report_title)
+        normalized = format.lower()
+        if normalized == "docx":
+            return self.generate_word_report(target, findings, report_title)
+        if normalized in {"md", "markdown"}:
+            return self.generate_markdown_report(target, findings, report_title)
+        if normalized == "html":
+            return self.generate_html_report(target, findings, report_title)
+        return "[ERROR] Unsupported report format. Use docx, md, or html."
 
     @tool()
     def generate_word_report_from_artifacts(
