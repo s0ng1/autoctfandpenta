@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
 import re
+from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlsplit
 
@@ -31,10 +34,42 @@ PYTHON_SHELL_ESCAPE_PATTERNS = (
 )
 URL_HOST_PATTERN = re.compile(r"https?://([^/\s'\"`]+)")
 BARE_HOST_PATTERN = re.compile(r"(?<![\w/.-])((?:localhost|(?:\d{1,3}\.){3}\d{1,3}|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+))(?:\:\d{1,5})?(?=[/\s'\"`]|$)")
+DEFAULT_WORKSPACE = os.getenv("INTENTLANG_WORKSPACE", "/home/ubuntu/Workspace")
 
 
 class SecurityViolation(ValueError):
     pass
+
+
+def _security_policy_path(workspace: str | Path | None = None) -> Path:
+    base = Path(workspace or DEFAULT_WORKSPACE)
+    return base / "intentlang" / "metadata" / "security_policy.json"
+
+
+def load_security_policy(workspace: str | Path | None = None) -> dict:
+    path = _security_policy_path(workspace)
+    if not path.exists():
+        return {
+            "command_timeout_seconds": DEFAULT_COMMAND_TIMEOUT_SECONDS,
+            "allowed_host_patterns": list(DEFAULT_ALLOWED_HOST_PATTERNS),
+            "dangerous_command_patterns": [name for name, _ in DANGEROUS_COMMAND_PATTERNS],
+            "content_inline_threshold_bytes": 4096,
+            "container_workspace": str(workspace or DEFAULT_WORKSPACE),
+            "flag_format_hint": "",
+            "accepted_flag_patterns": [],
+        }
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "command_timeout_seconds": DEFAULT_COMMAND_TIMEOUT_SECONDS,
+            "allowed_host_patterns": list(DEFAULT_ALLOWED_HOST_PATTERNS),
+            "dangerous_command_patterns": [name for name, _ in DANGEROUS_COMMAND_PATTERNS],
+            "content_inline_threshold_bytes": 4096,
+            "container_workspace": str(workspace or DEFAULT_WORKSPACE),
+            "flag_format_hint": "",
+            "accepted_flag_patterns": [],
+        }
 
 
 def normalize_timeout(timeout: int | None) -> int:

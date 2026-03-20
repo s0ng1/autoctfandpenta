@@ -1,5 +1,7 @@
 import json
+import importlib
 import re
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -7,16 +9,21 @@ from typing import Annotated, Any
 
 from core import namespace, tool, toolset
 
+PROJECT_ROOT = Path(__file__).resolve().parents[5]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from intentlang.contracts import ARTIFACT_SCHEMAS
+
 namespace()
 
 
 def _timestamp() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
-
-_CTF_FLAG_PATTERN = re.compile(r"^(?:flag|FLAG)\{[^{}\n]+\}$")
 CONTENT_INLINE_THRESHOLD_BYTES = 4096
 CONTENT_SUMMARY_LENGTH = 200
+MAX_CTF_FLAG_LENGTH = 512
 
 
 @toolset()
@@ -25,75 +32,7 @@ class IntentLangMemory:
     Manage structured runtime metadata and artifacts for intent-native runs.
     """
 
-    ARTIFACT_SCHEMAS = {
-        "recon_summary": {
-            "required": ["summary"],
-            "optional": ["scope", "tech_stack", "auth", "source", "timestamp"],
-            "defaults": {"source": "agent"},
-        },
-        "surface_map": {
-            "required": ["url", "kind"],
-            "optional": ["method", "params", "notes", "source", "timestamp"],
-            "enums": {"kind": ["page", "endpoint", "api", "form", "file", "script"]},
-            "defaults": {"source": "agent"},
-        },
-        "hypotheses": {
-            "required": ["title", "rationale"],
-            "optional": ["confidence", "next_step", "related_urls", "source", "timestamp"],
-            "enums": {"confidence": ["low", "medium", "high"]},
-            "defaults": {"confidence": "medium", "source": "agent"},
-        },
-        "candidate_findings": {
-            "required": ["title", "type", "summary"],
-            "optional": ["severity", "location", "payload", "confidence", "finding_id", "evidence_id", "source", "timestamp"],
-            "enums": {
-                "severity": ["严重", "高危", "中危", "低危", "信息"],
-                "confidence": ["low", "medium", "high"],
-                "type": ["sqli", "xss", "idor", "rce", "upload", "auth", "ssrf", "xxe", "logic", "flag", "other"],
-            },
-            "defaults": {"severity": "信息", "confidence": "medium", "source": "agent"},
-        },
-        "candidate_evidence": {
-            "required": ["kind", "summary"],
-            "optional": ["content", "url", "path", "related_finding", "finding_id", "evidence_id", "source", "timestamp"],
-            "enums": {"kind": ["http", "browser", "screenshot", "terminal", "note", "flag"]},
-            "defaults": {"source": "agent"},
-        },
-        "verified_findings": {
-            "required": ["title", "type", "summary"],
-            "optional": [
-                "finding_id",
-                "evidence_id",
-                "severity",
-                "description",
-                "evidence_summary",
-                "reproduction_steps",
-                "screenshot_path",
-                "remediation",
-                "control_point",
-                "evaluation_unit",
-                "risk_analysis",
-                "vuln_url",
-                "test_process",
-                "vuln_code",
-                "source",
-                "timestamp",
-                "flag",
-                "proof",
-                "target",
-            ],
-            "enums": {
-                "severity": ["严重", "高危", "中危", "低危", "信息"],
-                "type": ["sqli", "xss", "idor", "rce", "upload", "auth", "ssrf", "xxe", "logic", "flag", "other"],
-            },
-            "defaults": {"severity": "信息", "source": "agent"},
-        },
-        "final_report_reference": {
-            "required": ["path", "type"],
-            "optional": ["summary", "target", "total_findings", "recorded_at"],
-            "enums": {"type": ["docx", "md", "html"]},
-        },
-    }
+    ARTIFACT_SCHEMAS = ARTIFACT_SCHEMAS
 
     def __init__(self, workspace: str = "/home/ubuntu/Workspace"):
         self.workspace = Path(workspace)
@@ -115,6 +54,11 @@ class IntentLangMemory:
         if not path.exists():
             raise FileNotFoundError(f"{path} does not exist")
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def _read_json_if_exists(self, path: Path) -> dict[str, Any]:
+        if not path.exists():
+            return {}
+        return self._read_json(path)
 
     def _write_json(self, path: Path, payload: dict[str, Any]) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -168,7 +112,7 @@ class IntentLangMemory:
         try:
             hydrated["content"] = Path(path).read_text(encoding="utf-8")
         except OSError:
-            hydrated["content"] = ""
+            hydrated["content"] = f"[ERROR: payload file missing: {path}]"
         return hydrated
 
     def _normalize_artifact_item(self, name: str, item: dict[str, Any]) -> dict[str, Any]:
@@ -261,6 +205,75 @@ class IntentLangMemory:
                 merged[key] = current[key]
         return self._normalize_verified_finding(merged)
 
+    def _merge_non_empty_fields(self, current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(current)
+        for key, value in incoming.items():
+            if value not in ("", None, []):
+                merged[key] = value
+        return merged
+
+    def _read_security_policy(self) -> dict[str, Any]:
+        return self._read_json_if_exists(self._metadata_path("security_policy"))
+
+    def _read_ctf_flag_hints(self) -> tuple[str, list[str]]:
+        policy = self._read_security_policy()
+        hint = str(policy.get("flag_format_hint", "")).strip()
+        patterns = [str(pattern).strip() for pattern in policy.get("accepted_flag_patterns", []) if str(pattern).strip()]
+        if hint or patterns:
+            return hint, patterns
+
+        intents = self._read_json_if_exists(self._metadata_path("intents"))
+        for item in intents.get("items", []):
+            if item.get("kind") != "CTFGoalIntent":
+                continue
+            contexts = item.get("contexts", {})
+            intent_hint = str(contexts.get("flag_format_hint", "")).strip()
+            intent_patterns = [str(pattern).strip() for pattern in contexts.get("accepted_flag_patterns", []) if str(pattern).strip()]
+            if intent_hint or intent_patterns:
+                return intent_hint, intent_patterns
+        return "", []
+
+    def _hint_to_regex(self, hint: str) -> str:
+        escaped = re.escape(hint.strip())
+        return escaped.replace(r"\.\.\.", r"[^{}\n]+")
+
+    def _flag_matches_hints(self, flag: str, format_hint: str, accepted_patterns: list[str]) -> bool:
+        patterns = list(accepted_patterns)
+        if format_hint:
+            patterns.append(self._hint_to_regex(format_hint))
+        if not patterns:
+            return True
+        for pattern in patterns:
+            try:
+                if re.fullmatch(pattern, flag):
+                    return True
+            except re.error:
+                if pattern == flag:
+                    return True
+        return False
+
+    def _validate_ctf_flag(self, flag: str) -> tuple[str, dict[str, Any]]:
+        normalized = str(flag).strip()
+        if not normalized:
+            raise ValueError("ctf flag must not be empty")
+        if "\n" in normalized or "\r" in normalized:
+            raise ValueError("ctf flag must be a single line")
+        if len(normalized) > MAX_CTF_FLAG_LENGTH:
+            raise ValueError(f"ctf flag must be at most {MAX_CTF_FLAG_LENGTH} characters")
+
+        format_hint, accepted_patterns = self._read_ctf_flag_hints()
+        matches_hint = self._flag_matches_hints(normalized, format_hint, accepted_patterns)
+        if format_hint or accepted_patterns:
+            format_confidence = "high" if matches_hint else "low"
+        else:
+            format_confidence = "medium"
+        metadata = {
+            "format_hint": format_hint,
+            "matches_hint": matches_hint,
+            "format_confidence": format_confidence,
+        }
+        return normalized, metadata
+
     def _validate_artifact_item(self, name: str, item: dict[str, Any]) -> None:
         schema = self.ARTIFACT_SCHEMAS.get(name)
         if not schema:
@@ -275,12 +288,6 @@ class IntentLangMemory:
     def _validate_artifact_items(self, name: str, items: list[dict[str, Any]]) -> None:
         for item in items:
             self._validate_artifact_item(name, item)
-
-    def _validate_ctf_flag(self, flag: str) -> str:
-        normalized = str(flag).strip()
-        if not _CTF_FLAG_PATTERN.fullmatch(normalized):
-            raise ValueError("ctf flag must match flag{...} or FLAG{...}")
-        return normalized
 
     @tool()
     def list_metadata(self) -> list[str]:
@@ -317,6 +324,57 @@ class IntentLangMemory:
     ) -> dict[str, Any]:
         """Read the minimum schema definition for one artifact collection."""
         return self.ARTIFACT_SCHEMAS.get(name, {"required": [], "optional": []})
+
+    @tool()
+    def validate_runtime_contract(self) -> dict[str, Any]:
+        """
+        Inspect the currently installed toolset surface and report missing core capabilities.
+        """
+        contract: dict[str, list[str]] = {
+            "terminal": ["run_command", "new_session", "send_keys", "get_output"],
+            "proxy": ["list_traffic", "view_traffic", "replay_request"],
+            "intentlang": ["read_metadata", "append_artifact_item", "promote_artifact_item", "record_ctf_flag"],
+            "report": ["add_screenshot", "generate_word_report_from_artifacts", "generate_report"],
+        }
+        try:
+            toolset_module = importlib.import_module("toolset")
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": f"failed to import toolset: {exc}",
+                "missing_namespaces": sorted(contract.keys()),
+                "missing_methods": contract,
+                "recommendations": [
+                    "Confirm the runtime is loading the expected toolset package before continuing.",
+                ],
+            }
+
+        missing_namespaces: list[str] = []
+        missing_methods: dict[str, list[str]] = {}
+        available: dict[str, list[str]] = {}
+        for namespace_name, methods in contract.items():
+            namespace_obj = getattr(toolset_module, namespace_name, None)
+            if namespace_obj is None:
+                missing_namespaces.append(namespace_name)
+                missing_methods[namespace_name] = methods
+                continue
+            present = [method for method in methods if hasattr(namespace_obj, method)]
+            missing = [method for method in methods if method not in present]
+            available[namespace_name] = present
+            if missing:
+                missing_methods[namespace_name] = missing
+
+        return {
+            "ok": not missing_namespaces and not missing_methods,
+            "available_methods": available,
+            "missing_namespaces": missing_namespaces,
+            "missing_methods": missing_methods,
+            "recommended_usage": {
+                "terminal": "Prefer run_command for one-shot commands; use interactive sessions only when shell state matters.",
+                "proxy": "Use list_traffic/view_traffic/replay_request. Do not guess proxy API names.",
+                "artifacts": "Write candidate artifacts early; promote to verified findings only after validation.",
+            },
+        }
 
     @tool()
     def append_artifact_item(
@@ -394,7 +452,10 @@ class IntentLangMemory:
             raise IndexError(f"unable to resolve source item for artifact {source_name}")
 
         promoted_item = self._normalize_artifact_item(target_name, dict(source_items[resolved_index]))
-        promoted_item.update(updates)
+        if target_name == "verified_findings":
+            promoted_item = self._merge_verified_finding(promoted_item, updates)
+        else:
+            promoted_item = self._merge_non_empty_fields(promoted_item, updates)
         promoted_item["promoted_from"] = source_name
         promoted_item["promoted_at"] = _timestamp()
         self._validate_artifact_item(target_name, promoted_item)
@@ -529,7 +590,7 @@ class IntentLangMemory:
         """
         Save a Chinese CTF solve report in the workspace and set final_report_reference.
         """
-        flag = self._validate_ctf_flag(flag)
+        flag, _ = self._validate_ctf_flag(flag)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_target = "".join(c if c.isalnum() or c in "-._" else "_" for c in target)
         filename = f"CTF_Report_{safe_target}_{timestamp}.md"
@@ -560,7 +621,7 @@ class IntentLangMemory:
         """
         Record the final flag as verified evidence for CTF runs.
         """
-        flag = self._validate_ctf_flag(flag)
+        flag, flag_metadata = self._validate_ctf_flag(flag)
         item = {
             "title": "CTF Flag Retrieved",
             "type": "flag",
@@ -570,5 +631,6 @@ class IntentLangMemory:
             "proof": proof,
             "target": target,
             "recorded_at": _timestamp(),
+            **flag_metadata,
         }
         return self.append_artifact_item("verified_findings", item)

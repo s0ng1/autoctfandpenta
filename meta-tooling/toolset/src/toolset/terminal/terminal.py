@@ -8,7 +8,7 @@ import libtmux
 import psutil
 
 from core import tool, toolset, namespace
-from security_guard import DEFAULT_ALLOWED_HOST_PATTERNS, SecurityViolation, validate_command
+from security_guard import DEFAULT_ALLOWED_HOST_PATTERNS, SecurityViolation, load_security_policy, validate_command
 
 namespace()
 
@@ -16,7 +16,9 @@ namespace()
 class Terminal:
     def __init__(self):
         self.server = libtmux.Server()
-        self.allowed_hosts = DEFAULT_ALLOWED_HOST_PATTERNS
+        policy = load_security_policy()
+        self.allowed_hosts = tuple(policy.get("allowed_host_patterns") or DEFAULT_ALLOWED_HOST_PATTERNS)
+        self.default_timeout = int(policy.get("command_timeout_seconds") or 30)
 
     @tool()
     def list_sessions(self) -> list:
@@ -33,6 +35,7 @@ class Terminal:
             return f"No session found with id: {session_id}. Here are session ids: {', '.join(session_ids)}"
         session = sessions[0]
         session.kill()
+        return f"Killed session {session_id}"
 
     @tool()
     def new_session(self, show_gui: Annotated[bool, "Whether to open a visible GUI terminal window for the session."] = False) -> int:
@@ -118,7 +121,7 @@ class Terminal:
         command_to_send = keys
         if enter:
             try:
-                timeout_seconds = validate_command(keys, self.allowed_hosts, timeout_seconds)
+                timeout_seconds = validate_command(keys, self.allowed_hosts, timeout_seconds or self.default_timeout)
                 if keys.strip() and not keys.strip().startswith(("C-", "M-", "S-")):
                     command_to_send = f"timeout --foreground {timeout_seconds}s bash -lc {shlex.quote(keys)}"
             except SecurityViolation as exc:
@@ -131,12 +134,12 @@ class Terminal:
     def run_command(
         self,
         cmd: Annotated[str, "Shell command to run."],
-        timeout: Annotated[int, "Execution timeout in seconds."] = 30,
+        timeout: Annotated[int, "Execution timeout in seconds."] = 0,
         workdir: Annotated[Optional[str], "Optional working directory."] = None,
     ) -> dict:
         """Run a one-shot shell command and return stdout, stderr, exit code, and timeout status."""
         try:
-            timeout = validate_command(cmd, self.allowed_hosts, timeout)
+            timeout = validate_command(cmd, self.allowed_hosts, timeout or self.default_timeout)
         except SecurityViolation as exc:
             return {"stdout": "", "stderr": f"[SECURITY] {exc}", "exit_code": -2, "timed_out": False}
         timed_out = False

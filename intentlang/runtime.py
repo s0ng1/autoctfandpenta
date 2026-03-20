@@ -5,6 +5,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+
+from .contracts import ARTIFACT_SCHEMAS, extract_target_host_patterns
 
 CONTAINER_WORKSPACE = "/home/ubuntu/Workspace"
 CONTENT_INLINE_THRESHOLD_BYTES = 4096
@@ -47,6 +50,7 @@ class BaseIntent:
     objective: str
     success_criteria: list[str]
     constraints: list[str]
+    contexts: dict[str, Any] = field(default_factory=dict)
     inputs: dict[str, Any] = field(default_factory=dict)
 
 
@@ -147,76 +151,7 @@ class CTFStrategy(BaseStrategy):
 
 class ArtifactStore:
     """Persist intent-native artifacts inside the existing workspace."""
-
-    ARTIFACT_SCHEMAS = {
-        "recon_summary": {
-            "required": ["summary"],
-            "optional": ["scope", "tech_stack", "auth", "source", "timestamp"],
-            "defaults": {"source": "agent"},
-        },
-        "surface_map": {
-            "required": ["url", "kind"],
-            "optional": ["method", "params", "notes", "source", "timestamp"],
-            "enums": {"kind": ["page", "endpoint", "api", "form", "file", "script"]},
-            "defaults": {"source": "agent"},
-        },
-        "hypotheses": {
-            "required": ["title", "rationale"],
-            "optional": ["confidence", "next_step", "related_urls", "source", "timestamp"],
-            "enums": {"confidence": ["low", "medium", "high"]},
-            "defaults": {"confidence": "medium", "source": "agent"},
-        },
-        "candidate_findings": {
-            "required": ["title", "type", "summary"],
-            "optional": ["severity", "location", "payload", "confidence", "finding_id", "evidence_id", "source", "timestamp"],
-            "enums": {
-                "severity": ["严重", "高危", "中危", "低危", "信息"],
-                "confidence": ["low", "medium", "high"],
-                "type": ["sqli", "xss", "idor", "rce", "upload", "auth", "ssrf", "xxe", "logic", "flag", "other"],
-            },
-            "defaults": {"severity": "信息", "confidence": "medium", "source": "agent"},
-        },
-        "candidate_evidence": {
-            "required": ["kind", "summary"],
-            "optional": ["content", "url", "path", "related_finding", "finding_id", "evidence_id", "source", "timestamp"],
-            "enums": {"kind": ["http", "browser", "screenshot", "terminal", "note", "flag"]},
-            "defaults": {"source": "agent"},
-        },
-        "verified_findings": {
-            "required": ["title", "type", "summary"],
-            "optional": [
-                "finding_id",
-                "evidence_id",
-                "severity",
-                "description",
-                "evidence_summary",
-                "reproduction_steps",
-                "screenshot_path",
-                "remediation",
-                "control_point",
-                "evaluation_unit",
-                "risk_analysis",
-                "vuln_url",
-                "test_process",
-                "vuln_code",
-                "source",
-                "timestamp",
-                "flag",
-                "proof",
-                "target",
-            ],
-            "enums": {
-                "severity": ["严重", "高危", "中危", "低危", "信息"],
-                "type": ["sqli", "xss", "idor", "rce", "upload", "auth", "ssrf", "xxe", "logic", "flag", "other"],
-            },
-            "defaults": {"severity": "信息", "source": "agent"},
-        },
-        "final_report_reference": {
-            "required": ["path", "type"],
-            "optional": ["summary", "target", "total_findings", "recorded_at"],
-            "enums": {"type": ["docx", "md", "html"]},
-        },
-    }
+    ARTIFACT_SCHEMAS = ARTIFACT_SCHEMAS
 
     REQUIRED_ARTIFACTS = (
         "recon_summary",
@@ -308,6 +243,7 @@ class IntentRuntime:
             "Do not scan ports or IP segments outside the target.",
             f"Use structured artifacts in {CONTAINER_WORKSPACE}/intentlang/ instead of relying on memory only.",
         ]
+        target_host = self._target_host()
 
         if self.mode == "pentest":
             return [
@@ -324,6 +260,11 @@ class IntentRuntime:
                         "Avoid destructive actions and stop if the target becomes unstable.",
                         "Rate-limit requests and do not perform DoS-style activity.",
                     ],
+                    contexts={
+                        "authorization_scope": "Only test the supplied target and directly related in-scope web paths.",
+                        "target_host": target_host,
+                        "known_limitations": "Do not assume credentials, internal network reachability, or out-of-scope hosts.",
+                    },
                 ),
                 WebVerificationIntent(
                     target=self.target,
@@ -337,6 +278,11 @@ class IntentRuntime:
                         "High-risk verified vulnerabilities must include screenshot evidence; medium/low-risk findings may use HTTP transcripts or terminal output as equivalent proof.",
                         "No destructive database or state-changing payloads.",
                     ],
+                    contexts={
+                        "authorization_scope": "Validate only findings discovered on the supplied target.",
+                        "target_host": target_host,
+                        "evidence_policy": "Prefer reproducible HTTP, browser, screenshot, or terminal proof tied to artifacts.",
+                    },
                 ),
             ]
 
@@ -352,8 +298,32 @@ class IntentRuntime:
                 + [
                     "End immediately after obtaining a real flag and recording evidence.",
                 ],
+                contexts={
+                    "challenge_context": "Flag format must come from challenge/platform hints or runtime metadata, not a hardcoded prefix.",
+                    "flag_format_hint": "",
+                    "accepted_flag_patterns": [],
+                    "target_host": target_host,
+                },
             )
         ]
+
+    def _target_host(self) -> str:
+        parsed = urlsplit(self.target if "://" in self.target else f"http://{self.target}")
+        return parsed.hostname or self.target
+
+    def _security_policy_payload(self) -> dict[str, Any]:
+        return {
+            "command_timeout_seconds": DEFAULT_COMMAND_TIMEOUT_SECONDS,
+            "allowed_host_patterns": [
+                *DEFAULT_ALLOWED_HOST_PATTERNS,
+                *[pattern for pattern in extract_target_host_patterns(self.target) if pattern not in DEFAULT_ALLOWED_HOST_PATTERNS],
+            ],
+            "dangerous_command_patterns": DANGEROUS_COMMAND_PATTERNS,
+            "content_inline_threshold_bytes": CONTENT_INLINE_THRESHOLD_BYTES,
+            "container_workspace": CONTAINER_WORKSPACE,
+            "flag_format_hint": "",
+            "accepted_flag_patterns": [],
+        }
 
     def bootstrap(self) -> None:
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -384,29 +354,10 @@ class IntentRuntime:
         )
         self.artifacts.write_metadata(
             "security_policy",
-            {
-                "command_timeout_seconds": DEFAULT_COMMAND_TIMEOUT_SECONDS,
-                "allowed_host_patterns": DEFAULT_ALLOWED_HOST_PATTERNS,
-                "dangerous_command_patterns": DANGEROUS_COMMAND_PATTERNS,
-                "content_inline_threshold_bytes": CONTENT_INLINE_THRESHOLD_BYTES,
-                "container_workspace": CONTAINER_WORKSPACE,
-            },
+            self._security_policy_payload(),
         )
 
     def render_agent_task(self) -> str:
-        runtime_objects = "\n".join(
-            f"- {obj.name}: {obj.location} ({obj.description})" for obj in self.runtime_objects
-        )
-        intent_section = "\n".join(
-            [
-                f"- {intent.kind}: {intent.objective}\n"
-                f"  Success criteria: {'; '.join(intent.success_criteria)}\n"
-                f"  Constraints: {'; '.join(intent.constraints)}"
-                for intent in self.intents
-            ]
-        )
-
-        strategy = self.strategy
         task_header = "Use the security-agent with an intent-native workflow."
 
         mode_specific = (
@@ -415,21 +366,16 @@ class IntentRuntime:
                     "This is a WEB PENETRATION TEST (NOT a CTF).",
                     "Default time budget: 15-25 minutes unless the user explicitly requests deeper coverage.",
                     "Do not stop on flag-like strings or trivia; focus on verified security findings.",
-                    "Use an incremental workflow: validate promising entry points as soon as they are found instead of waiting for full recon to finish.",
-                    "You may stop expanding coverage once you have either 1 high-risk finding or 2-3 medium-risk findings with complete evidence.",
                     "The final report MUST be written entirely in Chinese.",
-                    "Generate artifacts/markdown first; create a Word document (.docx) only as a finalize step when needed.",
-                    "Prefer toolset.report.generate_word_report() for the final deliverable; if docx dependencies are unavailable, generate a markdown or html report instead of blocking on package installation.",
                 ]
             )
             if self.mode == "pentest"
             else "\n".join(
                 [
                     "This is a CTF challenge.",
-                    "Your goal is to obtain the real flag (format flag{...} or FLAG{...}).",
-                    "Do not stop on decoy strings, hashes, tokens, or plaintext values that do not exactly match flag{...} or FLAG{...}.",
-                    "Record non-matching values only as candidate evidence or intermediate findings, not as the final flag.",
-                    "Stop only after a real flag matching flag{...} or FLAG{...} is obtained and recorded.",
+                    "Prefer the shortest high-yield path to the real flag over exhaustive coverage or long-running scans.",
+                    "Take the final flag format from the challenge, platform, or runtime metadata hints; do not assume a fixed prefix.",
+                    "Record promising values as candidate evidence even when they do not match a known hint yet.",
                 ]
             )
         )
@@ -443,26 +389,15 @@ Mode: {self.mode}
 {mode_specific}
 
 Intent-native contract:
-1. Read and follow the structured runtime metadata in {CONTAINER_WORKSPACE}/intentlang/metadata/, including security_policy.json.
+1. Read run, strategy, intents, runtime_objects, artifact_schemas, and security_policy from {CONTAINER_WORKSPACE}/intentlang/metadata/ before taking action.
 2. Treat {CONTAINER_WORKSPACE}/intentlang/artifacts/ as the persistent memory plane for this run.
-3. Update candidate artifacts aggressively when you discover useful signals; only be strict when promoting to verified findings or final report reference.
-4. Use Python code to orchestrate runtime objects instead of step-by-step conversational tool calls.
-
-Runtime objects:
-{runtime_objects}
-- intentlang memory: toolset.intentlang (use it to read metadata and append/replace structured artifacts)
-
-Strategy:
-- name: {strategy.name}
-- aggression: {strategy.aggression_level}
-- allow early stop: {strategy.allow_early_stop}
-- priority testing types: {', '.join(strategy.priority_testing_types)}
-- evidence requirements: {', '.join(strategy.evidence_requirements)}
-- hypothesis sorting: {', '.join(strategy.hypothesis_sorting)}
-- report requirements: {', '.join(strategy.report_requirements)}
-
-Intents:
-{intent_section}
+3. Use metadata as the source of truth for strategy, contexts, and allowed runtime behavior instead of relying on prompt-local copies.
+4. Update candidate artifacts aggressively when you discover useful signals; only be strict when promoting to verified findings or final report reference.
+5. Use Python code to orchestrate runtime objects instead of step-by-step conversational tool calls.
+6. Prefer toolset.terminal.run_command(...) for one-shot shell commands; use interactive terminal sessions only when shell state or incremental input truly matters.
+7. Use proxy methods by their real names: list_traffic(...), view_traffic(...), and replay_request(...). Do not guess API names.
+8. If the runtime surface looks incomplete or unexpected, call toolset.intentlang.validate_runtime_contract() before proceeding.
+9. Write candidate artifacts before expanding coverage so promising leads are not lost.
 
 Safety rules:
 - Do not scan ports or IP segments outside the target.

@@ -18,6 +18,27 @@ class Proxy:
         self.__client = Client(transport=transport)
 
     @tool()
+    def official_methods(self) -> dict:
+        """
+        Return the officially supported proxy methods so agents do not guess API names.
+        """
+        return {
+            "preferred_methods": [
+                "list_traffic",
+                "view_traffic",
+                "replay_request",
+            ],
+            "compatibility_aliases": {
+                "get_traffic": "list_traffic",
+            },
+            "notes": [
+                "Use list_traffic to enumerate recent matching requests.",
+                "Use view_traffic to inspect one request/response pair by id.",
+                "Use replay_request to resend a captured request with optional overrides.",
+            ],
+        }
+
+    @tool()
     def list_traffic(self, limit: int=5, offset: int=0, filter: Annotated[str, '''Caido HTTPQL statement, such as ' req.host.like:"%.example.com" and req.method.like:"POST" ' ''']=None) -> dict:
         query = gql("""
             query($offset: Int, $limit: Int, $filter: HTTPQL) {
@@ -56,6 +77,28 @@ class Proxy:
             filter = "preset:no-images and preset:no-styling"
         result = self.__client.execute(query, variable_values={"limit": limit, "offset": offset, "filter": filter})
         return result['interceptEntriesByOffset']
+
+    @tool()
+    def get_traffic(
+        self,
+        limit: int = 5,
+        offset: int = 0,
+        filter: Annotated[str, '''Deprecated alias for list_traffic. Use the same HTTPQL filter syntax as list_traffic. '''] = None,
+    ) -> dict:
+        """
+        Deprecated compatibility alias for list_traffic.
+        """
+        result = self.list_traffic(limit=limit, offset=offset, filter=filter)
+        if isinstance(result, dict):
+            result = dict(result)
+            result.setdefault(
+                "_compat",
+                {
+                    "deprecated_method": "get_traffic",
+                    "replacement": "list_traffic",
+                },
+            )
+        return result
 
     @tool()
     def view_traffic(self, id: int, b64encode: Annotated[bool, "whether the returned traffic needs to be base64 encoded. Generally, not required, so you can view the results directly"] = False) -> dict:

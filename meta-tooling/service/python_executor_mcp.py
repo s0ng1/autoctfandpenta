@@ -15,12 +15,13 @@ TOOLSET_SRC = Path(__file__).resolve().parents[1] / "toolset" / "src"
 if str(TOOLSET_SRC) not in sys.path:
     sys.path.insert(0, str(TOOLSET_SRC))
 
-from security_guard import SecurityViolation, find_python_shell_violations, validate_command
+from security_guard import SecurityViolation, find_python_shell_violations, load_security_policy, validate_command
 
 class PythonExecutor:
     def __init__(self, path="scripts"):
         self.path = path
         self.sessions = {}
+        self.security_policy = load_security_policy()
         os.makedirs(self.path, exist_ok=True)
 
     def _sanitize_filename(self, name):
@@ -107,11 +108,13 @@ class PythonExecutor:
         if not violations:
             return None
 
+        allowed_hosts = self.security_policy.get("allowed_host_patterns")
+        default_timeout = self.security_policy.get("command_timeout_seconds")
         messages = []
         for violation in violations:
             if violation and violation not in {"os-system", "subprocess-run", "asyncio-subprocess"}:
                 try:
-                    validate_command(violation, timeout=timeout)
+                    validate_command(violation, allowed_hosts=allowed_hosts, timeout=timeout or default_timeout)
                     messages.append(f"blocked shell escape `!{violation}`; use toolset.terminal.run_command(...) instead")
                 except SecurityViolation as exc:
                     messages.append(str(exc))
@@ -123,7 +126,8 @@ class PythonExecutor:
                 messages.append("blocked asyncio subprocess execution; use toolset.terminal.run_command(...) instead")
         return self._security_output("; ".join(messages))
 
-    def execute_code(self, session_name, code, timeout=10):
+    def execute_code(self, session_name, code, timeout=None):
+        effective_timeout = timeout or self.security_policy.get("command_timeout_seconds") or 30
         blocked = self._enforce_code_policy(code, timeout)
         if blocked is not None:
             return blocked
@@ -138,10 +142,6 @@ class PythonExecutor:
         exec_count = session['execution_count']
 
         cell = nbf.new_code_cell(code, execution_count=exec_count)
-        cell.outputs = []
-        notebook.cells.append(cell)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            nbformat.write(notebook, f)
 
         msg_id = client.execute(code)
         
@@ -154,8 +154,8 @@ class PythonExecutor:
             while True:
                 elapsed = time.time() - start_time
                 
-                if elapsed > timeout:
-                    error_msg = f"Execution timeout after {timeout} seconds. Attempting to interrupt..."
+                if elapsed > effective_timeout:
+                    error_msg = f"Execution timeout after {effective_timeout} seconds. Attempting to interrupt..."
                     output_objects.append(nbf.new_output('display_data', data={'text/plain': f'[SYSTEM] {error_msg}'}))
 
                     try:
@@ -215,6 +215,7 @@ class PythonExecutor:
             output_objects.append(nbf.new_output('display_data', data={'text/plain': f'[SYSTEM] {error_msg}'}))
 
         cell.outputs = output_objects if output_objects else []
+        notebook.cells.append(cell)
         with open(filepath, 'w', encoding='utf-8') as f:
             nbformat.write(notebook, f)
 
@@ -241,7 +242,7 @@ python_executer = PythonExecutor()
 def execute_code(
     session_name: Annotated[str, "Unique session ID. Same name shares state (vars, imports)."],
     code: Annotated[str, "Python code (multi-line OK). Runs in Jupyter kernel. Supports `%pip install pkg` and `!shell_cmd`."],
-    timeout: Annotated[Optional[int], "Max seconds (default: 10). Timeout interrupts but keeps session alive."]
+    timeout: Annotated[Optional[int], "Max seconds (default: runtime policy, usually 30). Timeout interrupts but keeps session alive."]
 ) -> list[dict]:
     """
     Run Python code in a stateful Jupyter kernel.
@@ -257,7 +258,7 @@ def execute_code(
     return python_executer.execute_code(
         session_name=session_name,
         code=code,
-        timeout=timeout or 10
+        timeout=timeout
     )
 
 @mcp.tool(output_schema=None)
