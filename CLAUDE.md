@@ -29,7 +29,7 @@ uv run --env-file .env YuPentestPilot.py --ctf <url> --workspace <dir> --mode ct
 Three-layer architecture:
 
 **Layer 1 – Scheduling (`YuPentestPilot.py`)**
-Entry point. Parses args, instantiates `IntentRuntime` to bootstrap workspace metadata, spins up a Docker container (`l3yx/sandbox:latest`), and invokes `claude --dangerously-skip-permissions --print <task>` inside it. `Ctfer` is a legacy alias.
+Entry point. Parses args, instantiates `IntentRuntime` to bootstrap workspace metadata, spins up a Docker container (`yupentestpilot/sandbox:latest`), and invokes `claude --dangerously-skip-permissions --print <task>` inside it. `Ctfer` is a legacy alias.
 
 **Layer 2 – Execution (`meta-tooling/service/python_executor_mcp.py`)**
 FastMCP server running inside the container. Backs each session with a live Jupyter kernel. Before running any code, `_enforce_code_policy()` calls `security_guard.find_python_shell_violations()` to block shell escapes (`!cmd`, `os.system`, `subprocess.*`, `asyncio.create_subprocess_*`) and redirects them to `toolset.terminal.run_command()`. `validate_command()` enforces a host allowlist and blocks dangerous patterns.

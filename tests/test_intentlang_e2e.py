@@ -180,6 +180,58 @@ class _FakeSandboxRuntime:
         self.cleaned = True
 
 
+class _FakeDockerImages:
+    def get(self, image):
+        return image
+
+
+class _FakeDockerContainers:
+    def __init__(self):
+        self.last_run_kwargs = None
+
+    def run(self, **kwargs):
+        self.last_run_kwargs = kwargs
+        return types.SimpleNamespace(stop=lambda timeout=5: None)
+
+
+class _FakeDockerClient:
+    def __init__(self):
+        self.images = _FakeDockerImages()
+        self.containers = _FakeDockerContainers()
+
+
+class _FakeCompletedProcess:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class YuPentestPilotRuntimeConfigTest(unittest.TestCase):
+    def test_runtime_uses_project_sandbox_image(self):
+        commands = []
+
+        def _fake_run(cmd, capture_output=False, text=False, check=False, stdout=None, stderr=None):
+            commands.append(cmd)
+            if cmd[:3] == ["docker", "image", "inspect"]:
+                return _FakeCompletedProcess(returncode=0, stdout="[]", stderr="")
+            if cmd[:3] == ["docker", "run", "-d"]:
+                return _FakeCompletedProcess(returncode=0, stdout="container-123\n", stderr="")
+            if cmd[:3] == ["docker", "stop", "-t"]:
+                return _FakeCompletedProcess(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        with patch.object(YuPentestPilot.subprocess, "run", side_effect=_fake_run):
+            runtime = YuPentestPilot.YuPentestPilotRuntime(vnc_port=5901, workspace="/tmp/ypp-workspace")
+
+        self.assertEqual(runtime.image, "yupentestpilot/sandbox:latest")
+        self.assertEqual(runtime.container.container_id, "container-123")
+        self.assertIn(["docker", "image", "inspect", "yupentestpilot/sandbox:latest"], commands)
+        docker_run = next(cmd for cmd in commands if cmd[:3] == ["docker", "run", "-d"])
+        self.assertIn(f"{YuPentestPilot.SCRIPT_DIR / 'meta-tooling' / 'service'}:/opt/service:ro", docker_run)
+        self.assertIn(f"{YuPentestPilot.SCRIPT_DIR / 'meta-tooling' / 'toolset' / 'src'}:/opt/toolset/src:ro", docker_run)
+
+
 class IntentLangCliE2ETest(unittest.TestCase):
     def setUp(self):
         _FakeSandboxRuntime.instances.clear()
@@ -575,6 +627,58 @@ class IntentLangMemoryE2ETest(unittest.TestCase):
             report_path = Path(report.generate_word_report_from_artifacts("https://report.example"))
             self.assertTrue(report_path.exists())
             self.assertEqual(report_path.suffix, ".docx" if DOCX_AVAILABLE else ".md")
+
+    def test_generate_word_report_includes_target_profile_from_run_metadata(self):
+        with TemporaryDirectory() as tempdir:
+            workspace = Path(tempdir)
+            runtime = IntentRuntime(target="https://report.example", mode="pentest", workspace=workspace)
+            runtime.bootstrap()
+            memory = IntentLangMemory(workspace=str(workspace))
+            report = ReportGenerator(workspace=str(workspace))
+
+            run_metadata_path = workspace / "intentlang" / "metadata" / "run.json"
+            run_metadata = json.loads(run_metadata_path.read_text(encoding="utf-8"))
+            run_metadata["target_profile"] = {
+                "site_type": "WordPress 博客",
+                "theme": "Sakura 主题 v3.3.9",
+                "cdn": "腾讯云 EdgeOne CDN",
+                "admin_username": "site-admin",
+            }
+            run_metadata_path.write_text(json.dumps(run_metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            memory.append_verified_finding(
+                title="Open Redirect in redirect endpoint",
+                vuln_type="logic",
+                summary="The redirect endpoint accepts arbitrary external targets.",
+                severity="中危",
+                test_process="Submit ?next=https://evil.example and observe external redirect.",
+                risk_analysis="Attackers can abuse trust relationships for phishing.",
+                remediation="Restrict redirects to an allowlist.",
+                target="https://report.example/redirect",
+            )
+
+            report_path = Path(report.generate_word_report_from_artifacts("https://report.example"))
+            self.assertTrue(report_path.exists())
+
+            if report_path.suffix == ".docx":
+                from docx import Document
+
+                doc = Document(report_path)
+                text_parts = [paragraph.text for paragraph in doc.paragraphs]
+                text_parts.extend(
+                    cell.text
+                    for table in doc.tables
+                    for row in table.rows
+                    for cell in row.cells
+                )
+                report_text = "\n".join(text_parts)
+            else:
+                report_text = report_path.read_text(encoding="utf-8")
+
+            self.assertIn("WordPress 博客", report_text)
+            self.assertIn("Sakura 主题 v3.3.9", report_text)
+            self.assertIn("腾讯云 EdgeOne CDN", report_text)
+            self.assertIn("site-admin", report_text)
 
     def test_generate_word_report_falls_back_to_markdown_when_docx_dependency_is_missing(self):
         with TemporaryDirectory() as tempdir:

@@ -46,6 +46,7 @@ Artifact 规则：
 - 请求、响应、截图路径、关键输出写入 `candidate_evidence`
 - 只有验证完成后才写入 `verified_findings`
 - finalize 后确认 `final_report_reference` 已更新
+- `pentest` 模式默认最终产物是 `.docx`；除非运行时明确缺少 `python-docx`，否则不要以 `.md` 作为最终报告收尾
 
 优先使用这些高层操作：
 
@@ -86,7 +87,8 @@ Artifact 规则：
 4. 对高置信入口立即验证，不等完整 recon
 5. 一旦形成高质量证据，立刻写 `candidate_*`
 6. 验证成功后提升到 `verified_findings`
-7. 达到阈值后停止扩面，最后按需生成报告
+7. 达到阈值后停止扩面，调用 `toolset.report.generate_word_report_from_artifacts(...)`
+8. 读取 `final_report_reference`，确认 `type == "docx"` 且路径真实存在；只有在运行时明确缺少 `python-docx` 时才接受 Markdown 回退，并把回退原因写清楚
 
 ### CTF
 

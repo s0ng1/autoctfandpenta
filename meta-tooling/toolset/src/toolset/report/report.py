@@ -19,6 +19,20 @@ class ReportGenerator:
     """生成包含漏洞详情和截图的 Word 渗透测试报告"""
 
     SEVERITY_ORDER = {"严重": 0, "高危": 1, "中危": 2, "低危": 3, "信息": 4}
+    TARGET_PROFILE_LABELS = {
+        "target": "目标 URL",
+        "site_type": "站点类型",
+        "application": "站点类型",
+        "cms": "CMS",
+        "theme": "主题/版本",
+        "template": "主题/版本",
+        "cdn": "CDN/WAF",
+        "waf": "CDN/WAF",
+        "edge_network": "CDN/WAF",
+        "admin_username": "管理员用户名",
+        "admin_user": "管理员用户名",
+        "username": "管理员用户名",
+    }
 
     def __init__(self, workspace: str = "/home/ubuntu/Workspace"):
         self.workspace = workspace
@@ -69,6 +83,45 @@ class ReportGenerator:
             return {}
         with open(metadata_path, "r", encoding="utf-8") as f:
             return json.load(f)
+
+    def _stringify_profile_value(self, value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            return "、".join(str(item) for item in value if item is not None).strip()
+        if isinstance(value, dict):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value).strip()
+
+    def _profile_label(self, key: str) -> str:
+        if key in self.TARGET_PROFILE_LABELS:
+            return self.TARGET_PROFILE_LABELS[key]
+        return key.replace("_", " ").strip() or "附加信息"
+
+    def _target_profile_rows(self, target: str) -> list[tuple[str, str]]:
+        run_metadata = self._read_run_metadata()
+        profile = {}
+        for field_name in ("target_profile", "target_info"):
+            field_value = run_metadata.get(field_name)
+            if isinstance(field_value, dict):
+                profile.update(field_value)
+
+        for metadata_key in ("site_type", "application", "cms", "theme", "template", "cdn", "waf", "edge_network", "admin_username", "admin_user", "username"):
+            if metadata_key in run_metadata and metadata_key not in profile:
+                profile[metadata_key] = run_metadata[metadata_key]
+
+        rows: list[tuple[str, str]] = [("目标 URL", target)]
+        used_labels = {"目标 URL"}
+        for key, value in profile.items():
+            text = self._stringify_profile_value(value)
+            if not text:
+                continue
+            label = self._profile_label(str(key))
+            if label in used_labels:
+                continue
+            used_labels.add(label)
+            rows.append((label, text))
+        return rows
 
     def _read_verified_findings_artifact(self) -> List[Dict]:
         artifact_path = os.path.join(self.workspace, "intentlang", "artifacts", "verified_findings.json")
@@ -285,13 +338,10 @@ class ReportGenerator:
         doc = Document()
         start_time, end_time = self._report_times()
         severity_counts = self._count_severities(findings)
+        target_profile_rows = self._target_profile_rows(target)
 
         title = doc.add_heading(report_title, 0)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        intro = doc.add_paragraph()
-        intro.add_run("目标：").bold = True
-        intro.add_run(target)
 
         time_para = doc.add_paragraph()
         time_para.add_run("测试时间：").bold = True
@@ -300,6 +350,14 @@ class ReportGenerator:
         summary = doc.add_paragraph()
         summary.add_run("执行摘要：").bold = True
         summary.add_run(f"共确认 {len(findings)} 个已验证安全发现。")
+
+        doc.add_heading("目标信息", level=1)
+        target_table = doc.add_table(rows=len(target_profile_rows) + 1, cols=2)
+        target_table.style = "Table Grid"
+        self._set_table_header(target_table, ["字段", "内容"])
+        for row_index, (label, value) in enumerate(target_profile_rows, start=1):
+            self._set_cell_text(target_table.rows[row_index].cells[0], label)
+            self._set_cell_text(target_table.rows[row_index].cells[1], value)
 
         doc.add_heading("风险汇总", level=1)
         summary_table = doc.add_table(rows=6, cols=2)
@@ -333,13 +391,19 @@ class ReportGenerator:
     ) -> str:
         start_time, end_time = self._report_times()
         severity_counts = self._count_severities(findings)
+        target_profile_rows = self._target_profile_rows(target)
         lines = [
             f"# {report_title}",
             "",
-            f"- 目标: {target}",
             f"- 测试时间: {start_time} 至 {end_time}",
             f"- 已验证发现数量: {len(findings)}",
+            "",
+            "## 目标信息",
+            "",
+            "| 字段 | 内容 |",
+            "| --- | --- |",
         ]
+        lines.extend(f"| {label} | {value} |" for label, value in target_profile_rows)
         if fallback_reason:
             lines.append(f"- 说明: {fallback_reason}")
         lines.extend(
@@ -401,6 +465,11 @@ class ReportGenerator:
     ) -> str:
         start_time, end_time = self._report_times()
         severity_counts = self._count_severities(findings)
+        target_profile_rows = self._target_profile_rows(target)
+        target_rows_html = "".join(
+            f"<tr><td>{escape(label)}</td><td>{escape(value)}</td></tr>"
+            for label, value in target_profile_rows
+        )
         summary_rows = "".join(
             f"<tr><td>{escape(level)}</td><td>{count}</td></tr>"
             for level, count in [
@@ -451,10 +520,13 @@ class ReportGenerator:
                 "</head>",
                 "<body>",
                 f"<h1>{escape(report_title)}</h1>",
-                f"<p><strong>目标:</strong> {escape(target)}</p>",
                 f"<p><strong>测试时间:</strong> {escape(start_time)} 至 {escape(end_time)}</p>",
                 f"<p><strong>已验证发现数量:</strong> {len(findings)}</p>",
                 fallback_html,
+                "<h2>目标信息</h2>",
+                "<table><thead><tr><th>字段</th><th>内容</th></tr></thead><tbody>",
+                target_rows_html,
+                "</tbody></table>",
                 "<h2>风险汇总</h2>",
                 "<table><thead><tr><th>风险等级</th><th>数量</th></tr></thead><tbody>",
                 summary_rows,

@@ -16,6 +16,11 @@ claude_code/.claude/settings.local.json
 
 # 工作目录（解题产生的临时文件）
 workspace/
+workspace-pentest/
+docker/cache/
+core.*
+*.core
+docs/latest-memory*.md
 
 # 可选的本地私有报告模板
 docs/渗透测试报告模板V1.2.docx

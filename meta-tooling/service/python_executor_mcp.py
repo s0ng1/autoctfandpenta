@@ -18,11 +18,26 @@ if str(TOOLSET_SRC) not in sys.path:
 from security_guard import SecurityViolation, find_python_shell_violations, load_security_policy, validate_command
 
 class PythonExecutor:
-    def __init__(self, path="scripts"):
-        self.path = path
+    def __init__(self, path=None):
+        self.path = path or os.getenv("PYTHON_EXECUTOR_PATH")
         self.sessions = {}
         self.security_policy = load_security_policy()
-        os.makedirs(self.path, exist_ok=True)
+        candidates = [
+            self.path,
+            "/home/ubuntu/Workspace/scripts",
+            "/tmp/python-executor-scripts",
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                os.makedirs(candidate, exist_ok=True)
+                self.path = candidate
+                break
+            except OSError:
+                continue
+        if not self.path:
+            raise RuntimeError("Failed to initialize a writable PythonExecutor workspace")
 
     def _sanitize_filename(self, name):
         name = re.sub(r'[^\w\-.]', '_', name)
