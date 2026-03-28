@@ -5,7 +5,7 @@ from core import tool, toolset, namespace
 
 namespace()
 
-NOTE_DIR =  os.path.join(Path.home(), "Workspace/notes")
+NOTE_DIR = Path.home() / "Workspace" / "notes"
 
 @toolset()
 class Note:

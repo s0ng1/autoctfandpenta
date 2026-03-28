@@ -18,7 +18,7 @@ class Browser:
         """
         Returns the BrowserContext object from Playwright-Python.
 
-        Examaple:
+        Example:
             You can use it to see which pages are available, open a new page to view its content, and then click on its elements:
             ```
             import toolset

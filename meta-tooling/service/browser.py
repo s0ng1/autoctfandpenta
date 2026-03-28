@@ -16,6 +16,8 @@ def start_browser_service(port):
             ],
             proxy={
                 "server": f"http://localhost:{os.getenv('CAIDO_PORT')}",
+                # Google domains bypassed to avoid capturing font/analytics traffic;
+                # remove if testing Google-dependent integrations (OAuth, reCAPTCHA, etc.)
                 "bypass": "localhost, 127.0.0.1, .google.com, .google.com.hk, .googleapis.com, .gvt1.com, .gvt1-cn.com, .gstatic.com, .ggpht.com"
             }
         )

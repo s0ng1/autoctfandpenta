@@ -1,3 +1,4 @@
+import atexit
 import time
 import os
 import re
@@ -43,17 +44,16 @@ class PythonExecutor:
         name = re.sub(r'[^\w\-.]', '_', name)
         return name
 
-    def _get_unique_filepath(self, session_name):
+    def _get_unique_filepath(self, session_name, max_attempts=1000):
         sanitized_name = self._sanitize_filename(session_name)
         base_path = os.path.join(self.path, f"{sanitized_name}.ipynb")
         if not os.path.exists(base_path):
             return base_path
-        i = 1
-        while True:
+        for i in range(1, max_attempts + 1):
             new_path = os.path.join(self.path, f"{sanitized_name}_{i}.ipynb")
             if not os.path.exists(new_path):
                 return new_path
-            i += 1
+        raise RuntimeError(f"too many sessions named '{session_name}' (>{max_attempts})")
 
     def _create_session(self, session_name):
         km = KernelManager(kernel_name='python3')
@@ -127,7 +127,18 @@ class PythonExecutor:
         default_timeout = self.security_policy.get("command_timeout_seconds")
         messages = []
         for violation in violations:
-            if violation and violation not in {"os-system", "subprocess-run", "asyncio-subprocess"}:
+            if violation and violation not in {
+                "os-system",
+                "subprocess-run",
+                "asyncio-subprocess",
+                "os-exec",
+                "eval",
+                "exec",
+                "compile",
+                "ctypes",
+                "pty-spawn",
+                "__import__",
+            }:
                 try:
                     validate_command(violation, allowed_hosts=allowed_hosts, timeout=timeout or default_timeout)
                     messages.append(f"blocked shell escape `!{violation}`; use toolset.terminal.run_command(...) instead")
@@ -139,6 +150,8 @@ class PythonExecutor:
                 messages.append("blocked subprocess shell execution; use toolset.terminal.run_command(...) instead")
             elif violation == "asyncio-subprocess":
                 messages.append("blocked asyncio subprocess execution; use toolset.terminal.run_command(...) instead")
+            elif violation in ("os-exec", "eval", "exec", "compile", "ctypes", "pty-spawn", "__import__"):
+                messages.append(f"blocked {violation}; use toolset.terminal.run_command(...) instead")
         return self._security_output("; ".join(messages))
 
     def execute_code(self, session_name, code, timeout=None):
@@ -251,7 +264,8 @@ class PythonExecutor:
             self.close_session(session_name)
 
 mcp = FastMCP("Python Executor", include_fastmcp_meta=False)
-python_executer = PythonExecutor()
+python_executor = PythonExecutor()
+atexit.register(python_executor.close_all_sessions)
 
 @mcp.tool(output_schema=None)
 def execute_code(
@@ -270,7 +284,7 @@ def execute_code(
     help(toolset)
     ```
     """
-    return python_executer.execute_code(
+    return python_executor.execute_code(
         session_name=session_name,
         code=code,
         timeout=timeout
@@ -279,12 +293,12 @@ def execute_code(
 @mcp.tool(output_schema=None)
 def list_sessions() -> list[str]:
     """Return list of active session names."""
-    return python_executer.list_sessions()
+    return python_executor.list_sessions()
 
 @mcp.tool(output_schema=None)
 def close_session(session_name: Annotated[str, "Session to close."]) -> bool:
     """Close a session."""
-    return python_executer.close_session(session_name)
+    return python_executor.close_session(session_name)
 
 
 if __name__ == "__main__":

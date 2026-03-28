@@ -201,7 +201,7 @@ class Proxy:
             data=body.encode("utf-8") if isinstance(body, str) else body,
             timeout=timeout,
             allow_redirects=overrides.get("allow_redirects", True),
-            verify=overrides.get("verify", False),
+            verify=overrides.get("verify", True),
         )
         duration_ms = int((time.perf_counter() - start) * 1000)
 

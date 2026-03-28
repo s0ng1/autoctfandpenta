@@ -8,6 +8,7 @@ from uuid import uuid4
 from typing import Annotated, Any
 
 from core import namespace, tool, toolset
+from security_guard import DEFAULT_WORKSPACE
 
 PROJECT_ROOT = Path(__file__).resolve().parents[5]
 if str(PROJECT_ROOT) not in sys.path:
@@ -34,7 +35,7 @@ class IntentLangMemory:
 
     ARTIFACT_SCHEMAS = ARTIFACT_SCHEMAS
 
-    def __init__(self, workspace: str = "/home/ubuntu/Workspace"):
+    def __init__(self, workspace: str = DEFAULT_WORKSPACE):
         self.workspace = Path(workspace)
         self.root = self.workspace / "intentlang"
         self.metadata_dir = self.root / "metadata"

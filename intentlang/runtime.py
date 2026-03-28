@@ -5,13 +5,14 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from .contracts import ARTIFACT_SCHEMAS, extract_target_host_patterns
 
 CONTAINER_WORKSPACE = "/home/ubuntu/Workspace"
 CONTENT_INLINE_THRESHOLD_BYTES = 4096
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
+# IMPORTANT: DANGEROUS_COMMAND_PATTERNS and DEFAULT_ALLOWED_HOST_PATTERNS
+# must stay in sync with security_guard.py which holds the canonical definitions.
 DEFAULT_ALLOWED_HOST_PATTERNS = [
     "127.0.0.1",
     "::1",
@@ -24,13 +25,14 @@ DEFAULT_ALLOWED_HOST_PATTERNS = [
     ".example.net",
 ]
 DANGEROUS_COMMAND_PATTERNS = [
-    "rm -rf /",
-    "mkfs.*",
-    "dd if=/dev/zero",
-    ":(){ :|:& };:",
+    "rm-rf-root",
+    "mkfs",
+    "dd-dev-zero",
+    "fork-bomb",
 ]
 
 
+# _utc_timestamp: mirror of intentlang.py _timestamp() — keep in sync
 def _utc_timestamp() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -178,6 +180,7 @@ class ArtifactStore:
                 self.write_json(path, {"artifact": name, "items": [], "updated_at": _utc_timestamp()})
 
     def write_json(self, path: Path, payload: dict[str, Any]) -> None:
+        # Mirror of IntentLangMemory._write_json() in intentlang.py — keep in sync
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -308,8 +311,8 @@ class IntentRuntime:
         ]
 
     def _target_host(self) -> str:
-        parsed = urlsplit(self.target if "://" in self.target else f"http://{self.target}")
-        return parsed.hostname or self.target
+        patterns = extract_target_host_patterns(self.target)
+        return patterns[0] if patterns else self.target
 
     def _security_policy_payload(self) -> dict[str, Any]:
         return {

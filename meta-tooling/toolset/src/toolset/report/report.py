@@ -10,6 +10,8 @@ from html import escape
 from typing import Annotated, Dict, List, Optional
 
 from core import namespace, tool, toolset
+from security_guard import DEFAULT_WORKSPACE
+from toolset.intentlang import intentlang
 
 namespace()
 
@@ -34,37 +36,19 @@ class ReportGenerator:
         "username": "管理员用户名",
     }
 
-    def __init__(self, workspace: str = "/home/ubuntu/Workspace"):
+    def __init__(self, workspace: str = DEFAULT_WORKSPACE):
         self.workspace = workspace
         self.screenshots_dir = os.path.join(workspace, "screenshots")
+        if os.path.abspath(str(workspace)) == os.path.abspath(DEFAULT_WORKSPACE):
+            self.intentlang = intentlang
+        else:
+            self.intentlang = intentlang.__class__(workspace=workspace)
         os.makedirs(self.workspace, exist_ok=True)
         os.makedirs(self.screenshots_dir, exist_ok=True)
 
     def _safe_filename(self, value: str) -> str:
         sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._")
         return sanitized or "report"
-
-    def _write_final_report_reference(self, report_path: str, report_type: str, target: str, total_findings: int) -> None:
-        artifacts_dir = os.path.join(self.workspace, "intentlang", "artifacts")
-        os.makedirs(artifacts_dir, exist_ok=True)
-        artifact_path = os.path.join(artifacts_dir, "final_report_reference.json")
-        now = datetime.now().isoformat(timespec="seconds")
-        payload = {
-            "artifact": "final_report_reference",
-            "items": [
-                {
-                    "path": report_path,
-                    "type": report_type,
-                    "target": target,
-                    "total_findings": total_findings,
-                    "recorded_at": now,
-                }
-            ],
-            "updated_at": now,
-        }
-        with open(artifact_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
-            f.write("\n")
 
     def _normalize_findings(self, findings: List[Dict]) -> List[Dict]:
         if not findings:
@@ -584,7 +568,7 @@ class ReportGenerator:
         filename = self._report_filename(target, "docx")
         report_path = os.path.join(self.workspace, filename)
         doc.save(report_path)
-        self._write_final_report_reference(report_path, "docx", target, len(findings))
+        self.intentlang.set_final_report_reference(report_path, "docx", summary=f"{len(findings)} findings for {target}")
         return report_path
 
     @tool()
@@ -604,7 +588,7 @@ class ReportGenerator:
         report_path = os.path.join(self.workspace, filename)
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(report_body)
-        self._write_final_report_reference(report_path, "md", target, len(findings))
+        self.intentlang.set_final_report_reference(report_path, "md", summary=f"{len(findings)} findings for {target}")
         return report_path
 
     @tool()
@@ -624,7 +608,7 @@ class ReportGenerator:
         report_path = os.path.join(self.workspace, filename)
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(report_body)
-        self._write_final_report_reference(report_path, "html", target, len(findings))
+        self.intentlang.set_final_report_reference(report_path, "html", summary=f"{len(findings)} findings for {target}")
         return report_path
 
     @tool()

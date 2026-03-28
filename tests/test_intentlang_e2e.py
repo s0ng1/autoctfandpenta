@@ -51,6 +51,13 @@ def _load_intentlang_memory_class():
 
 def _load_report_generator_class():
     core_stub = sys.modules["core"]
+    toolset_stub = types.ModuleType("toolset")
+    toolset_stub.__path__ = []
+    toolset_intentlang_stub = types.ModuleType("toolset.intentlang")
+    toolset_intentlang_stub.intentlang = IntentLangMemory(workspace="/tmp/codex-report-loader")
+    toolset_stub.intentlang = toolset_intentlang_stub
+    sys.modules["toolset"] = toolset_stub
+    sys.modules["toolset.intentlang"] = toolset_intentlang_stub
     module_path = ROOT / "meta-tooling" / "toolset" / "src" / "toolset" / "report" / "report.py"
     spec = importlib.util.spec_from_file_location("report_module", module_path)
     module = importlib.util.module_from_spec(spec)
@@ -148,9 +155,10 @@ PythonExecutor = _load_python_executor_class()
 
 
 class _FakeExecResult:
-    def __init__(self, exit_code, output):
+    def __init__(self, exit_code, output, error_output=b""):
         self.exit_code = exit_code
         self.output = output
+        self.error_output = error_output
 
 
 class _FakeContainer:
@@ -178,6 +186,12 @@ class _FakeSandboxRuntime:
 
     def cleanup(self):
         self.cleaned = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
 
 
 class _FakeDockerImages:

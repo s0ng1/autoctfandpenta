@@ -15,7 +15,10 @@ namespace()
 @toolset()
 class Terminal:
     def __init__(self):
-        self.server = libtmux.Server()
+        try:
+            self.server = libtmux.Server()
+        except Exception:
+            self.server = None
         policy = load_security_policy()
         self.allowed_hosts = tuple(policy.get("allowed_host_patterns") or DEFAULT_ALLOWED_HOST_PATTERNS)
         self.default_timeout = int(policy.get("command_timeout_seconds") or 30)
@@ -23,12 +26,16 @@ class Terminal:
     @tool()
     def list_sessions(self) -> list:
         """List terminal sessions."""
+        if not self.server:
+            return "[ERROR] tmux server not available"
         session_ids = [session.session_id.replace('$', '') for session in self.server.sessions]
         return session_ids
 
     @tool()
     def kill_session(self, session_id: int):
         """kill a session"""
+        if not self.server:
+            return "[ERROR] tmux server not available"
         session_ids = [session.session_id.replace('$', '') for session in self.server.sessions]
         sessions = self.server.sessions.filter(session_id=f"${session_id}")
         if not sessions:
@@ -40,6 +47,8 @@ class Terminal:
     @tool()
     def new_session(self, show_gui: Annotated[bool, "Whether to open a visible GUI terminal window for the session."] = False) -> int:
         """Open a new terminal window as a new session."""
+        if not self.server:
+            return "[ERROR] tmux server not available"
         session = self.server.new_session(attach=False, start_directory="/home/ubuntu/Workspace")
         session.set_option('status', 'off')
         session_id = session.session_id.replace('$', '')
@@ -64,6 +73,8 @@ class Terminal:
             end: Annotated[Optional[str],"Specify the ending line number. Zero is the first line of the visible pane. Positive numbers are lines in the visible pane. Negative numbers are lines in the history. - is the end of the visible pane Default: None"] = ""
         ) -> str:
         """Get the output of a terminal session by session id."""
+        if not self.server:
+            return "[ERROR] tmux server not available"
         session_ids = [session.session_id.replace('$', '') for session in self.server.sessions]
         sessions = self.server.sessions.filter(session_id=f"${session_id}")
         if not sessions:
@@ -83,7 +94,7 @@ class Terminal:
         """
         Send keys to a terminal session by session id.
 
-        Examaple:
+        Example:
             To execute 'whoami' command:
             ```
             import toolset
@@ -113,6 +124,8 @@ class Terminal:
 
             After execution, it will wait for wait_seconds before returning the result. If the command is not completed at this time, you need to call the relevant function again to view the pane output
         """
+        if not self.server:
+            return "[ERROR] tmux server not available"
         session_ids = [session.session_id.replace('$', '') for session in self.server.sessions]
         sessions = self.server.sessions.filter(session_id=f"${session_id}")
         if not sessions:
@@ -121,6 +134,8 @@ class Terminal:
         command_to_send = keys
         if enter:
             try:
+                # shlex.quote ensures keys is a single quoted argument to bash -lc,
+                # so the security check on the raw keys string is sufficient.
                 timeout_seconds = validate_command(keys, self.allowed_hosts, timeout_seconds or self.default_timeout)
                 if keys.strip() and not keys.strip().startswith(("C-", "M-", "S-")):
                     command_to_send = f"timeout --foreground {timeout_seconds}s bash -lc {shlex.quote(keys)}"

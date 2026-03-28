@@ -31,6 +31,13 @@ PYTHON_SHELL_ESCAPE_PATTERNS = (
     ("os-system", re.compile(r"\bos\.system\s*\(")),
     ("subprocess-run", re.compile(r"\bsubprocess\.(?:run|Popen|call|check_call|check_output)\s*\(")),
     ("asyncio-subprocess", re.compile(r"\basyncio\.create_subprocess_(?:shell|exec)\s*\(")),
+    ("os-exec", re.compile(r"\bos\.(?:exec[vlpe]*|spawn[vlpe]*)\s*\(")),
+    ("eval", re.compile(r"(?<!\w)eval\s*\(")),
+    ("exec", re.compile(r"(?<!\w)exec\s*\(")),
+    ("compile", re.compile(r"(?<!\w)compile\s*\(")),
+    ("ctypes", re.compile(r"\bctypes\b")),
+    ("pty-spawn", re.compile(r"\bpty\.spawn\b")),
+    ("__import__", re.compile(r"__import__\s*\(")),
 )
 URL_HOST_PATTERN = re.compile(r"https?://([^/\s'\"`]+)")
 BARE_HOST_PATTERN = re.compile(r"(?<![\w/.-])((?:localhost|(?:\d{1,3}\.){3}\d{1,3}|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+))(?:\:\d{1,5})?(?=[/\s'\"`]|$)")
